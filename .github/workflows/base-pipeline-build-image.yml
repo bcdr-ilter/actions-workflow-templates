@@ -111,7 +111,7 @@ jobs:
         password: ${{ secrets.REGISTRY_PASSWORD }}
 
     - name: Configure AWS Credentials
-      if: steps.check_image.outputs.exists == 'false'
+      if: vars.CLOUD_PROVIDER == 'aws' && steps.check_image.outputs.exists == 'false'
       uses: aws-actions/configure-aws-credentials@v3
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -119,7 +119,7 @@ jobs:
         aws-region: ${{ secrets.AWS_REGION }}
 
     - name: Log in to Amazon ECR
-      if: steps.check_image.outputs.exists == 'false'
+      if: vars.CLOUD_PROVIDER == 'aws' && steps.check_image.outputs.exists == 'false'
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v2
       with:
@@ -158,6 +158,7 @@ jobs:
         context: .
         file: ./.cicd/build/Dockerfile
         push: true
+        network: host
         tags: ${{ vars.ACR_LOGIN_SERVER || 'inventkubernetesbcdr.azurecr.io' }}/base-images/pipeline-build-image:${{ steps.compute_tag.outputs.image_tag }}
         cache-from: type=local,src=/tmp/.buildx-cache
         cache-to: type=local,dest=/tmp/.buildx-cache,mode=max

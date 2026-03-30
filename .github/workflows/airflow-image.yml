@@ -37,9 +37,9 @@ jobs:
       - name: Set Registry Based on Provider
         run: |
           if [ "$CLOUD_PROVIDER" == "aws" ]; then
-            echo "REGISTRY=126985841472.dkr.ecr.eu-west-1.amazonaws.com" >> $GITHUB_ENV
+            echo "REGISTRY=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com" >> $GITHUB_ENV
           elif [ "$CLOUD_PROVIDER" == "azure" ]; then
-            echo "REGISTRY=inventkubernetes.azurecr.io" >> $GITHUB_ENV
+            echo "REGISTRY=${{ vars.ACR_LOGIN_SERVER || 'inventkubernetesbcdr.azurecr.io' }}" >> $GITHUB_ENV
           fi
 
       - name: Set IMAGE_ENV based on Branch
@@ -141,7 +141,7 @@ jobs:
         if: env.CLOUD_PROVIDER == 'azure' && steps.image_check.outputs.exists == 'false'
         uses: azure/docker-login@v1
         with:
-          login-server: inventkubernetes.azurecr.io
+          login-server: ${{ vars.ACR_LOGIN_SERVER || 'inventkubernetesbcdr.azurecr.io' }}
           username: ${{ secrets.INVENTKUBERNETES_USERNAME }}
           password: ${{ secrets.INVENTKUBERNETES_PASSWORD }}
 

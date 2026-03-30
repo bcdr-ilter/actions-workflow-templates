@@ -180,6 +180,7 @@ jobs:
           context: .
           file: ./.cicd/build/Dockerfile.airflow
           push: true
+          network: host
           tags: ${{ env.REGISTRY }}/${{ vars.CUSTOMER_NAME }}/${{ env.IMAGE_ENV }}/airflow-scheduler:${{ steps.compute_version.outputs.version }}
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache,mode=max

@@ -61,8 +61,8 @@ jobs:
     - name: Check if image already exists in ACR
       id: check_image
       run: |
-        docker login inventkubernetes.azurecr.io -u ${{ secrets.INVENTKUBERNETES_USERNAME }} -p ${{ secrets.INVENTKUBERNETES_PASSWORD }}
-        if docker manifest inspect inventkubernetes.azurecr.io/base-images/pipeline-build-image:${{ steps.compute_tag.outputs.image_tag }} > /dev/null 2>&1; then
+        docker login ${{ vars.ACR_LOGIN_SERVER || 'inventkubernetesbcdr.azurecr.io' }} -u ${{ secrets.INVENTKUBERNETES_USERNAME }} -p ${{ secrets.INVENTKUBERNETES_PASSWORD }}
+        if docker manifest inspect ${{ vars.ACR_LOGIN_SERVER || 'inventkubernetesbcdr.azurecr.io' }}/base-images/pipeline-build-image:${{ steps.compute_tag.outputs.image_tag }} > /dev/null 2>&1; then
           echo "exists=true" >> $GITHUB_OUTPUT
           echo "Image already exists. Skipping build."
         else
@@ -130,7 +130,7 @@ jobs:
       run: |
         # echo "Logging into Amazon ECR..."
         # aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
-        docker login inventkubernetes.azurecr.io --username ${{ secrets.AZURE_CLIENT_ID }} --password ${{ secrets.AZURE_CLIENT_SECRET }}
+        docker login ${{ vars.ACR_LOGIN_SERVER || 'inventkubernetesbcdr.azurecr.io' }} --username ${{ secrets.AZURE_CLIENT_ID }} --password ${{ secrets.AZURE_CLIENT_SECRET }}
 
     - name: Set up Docker Buildx
       if: steps.check_image.outputs.exists == 'false'
@@ -158,7 +158,7 @@ jobs:
         context: .
         file: ./.cicd/build/Dockerfile
         push: true
-        tags: inventkubernetes.azurecr.io/base-images/pipeline-build-image:${{ steps.compute_tag.outputs.image_tag }}
+        tags: ${{ vars.ACR_LOGIN_SERVER || 'inventkubernetesbcdr.azurecr.io' }}/base-images/pipeline-build-image:${{ steps.compute_tag.outputs.image_tag }}
         cache-from: type=local,src=/tmp/.buildx-cache
         cache-to: type=local,dest=/tmp/.buildx-cache,mode=max
 
@@ -167,7 +167,7 @@ jobs:
     needs: build_base_image
     runs-on: ${{ vars.RUNNER_LABEL || 'arc-runner-set-eks' }}
     container:
-      image: inventkubernetes.azurecr.io/base-images/pipeline-build-image:${{ needs.build_base_image.outputs.image_tag }}
+      image: ${{ vars.ACR_LOGIN_SERVER || 'inventkubernetesbcdr.azurecr.io' }}/base-images/pipeline-build-image:${{ needs.build_base_image.outputs.image_tag }}
       options: --user root
       credentials:
         username: ${{ secrets.INVENTKUBERNETES_USERNAME }}

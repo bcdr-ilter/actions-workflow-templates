@@ -1,0 +1,102 @@
+name: CI/CD Pipeline
+
+on: 
+  workflow_call:
+    inputs:
+      enable_lint:
+        description: 'Enable linting steps'
+        required: false
+        type: string
+        default: 'true'
+      enable_airflow_tests:
+        description: 'Enable Airflow unit test steps'
+        required: false
+        type: string
+        default: 'true'
+      enable_rocks_tests:
+        description: 'Enable Rocks unit test steps'
+        required: false
+        type: string
+        default: 'false'
+      enable_metadata_check:
+        description: 'Enable metadata check steps'
+        required: false
+        type: string
+        default: 'true'
+
+jobs:
+  tests:
+    uses: ./.github/workflows/base-pipeline-build-image.yml
+    secrets: inherit
+    with:
+      enable_lint: ${{ inputs.enable_lint }}
+      enable_airflow_tests: ${{ inputs.enable_airflow_tests }}
+      enable_rocks_tests: ${{ inputs.enable_rocks_tests }}
+      enable_metadata_check: ${{ inputs.enable_metadata_check }}
+
+  deploy_scripts:
+    if: |
+      startsWith(github.ref, 'refs/heads/feature') ||
+      startsWith(github.head_ref, 'feature') ||
+      github.ref == 'refs/heads/main' ||
+      github.head_ref == 'main' ||
+      github.ref == 'refs/heads/master' ||
+      github.head_ref == 'master' ||
+      github.ref == 'refs/heads/dev' ||
+      github.head_ref == 'dev' ||
+      github.ref == 'refs/heads/uat' ||
+      github.head_ref == 'uat'
+    uses: ./.github/workflows/deploy-scripts.yml
+    secrets: inherit
+    needs: tests
+
+  build-and-push-airflow-image:
+    uses: ./.github/workflows/airflow-image.yml
+    secrets: inherit
+
+  deploy-airflow-image:
+    if: |
+      startsWith(github.ref, 'refs/heads/feature') ||
+      startsWith(github.head_ref, 'feature') ||
+      github.ref == 'refs/heads/main' ||
+      github.head_ref == 'main' ||
+      github.ref == 'refs/heads/master' ||
+      github.head_ref == 'master' ||
+      github.ref == 'refs/heads/dev' ||
+      github.head_ref == 'dev' ||
+      github.ref == 'refs/heads/uat' ||
+      github.head_ref == 'uat'
+    uses: ./.github/workflows/airflow-deploy-composite.yml
+    needs: 
+      - build-and-push-airflow-image
+      - tests
+    secrets: inherit
+    with:
+      airflow-image-version: ${{ needs.build-and-push-airflow-image.outputs.airflow_image_version }}
+
+  code-scan:
+    name: Code Scanning
+    runs-on: ${{ vars.RUNNER_LABEL || 'arc-runner-set-eks' }}
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE}}
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
+
+      - name: Run Trivy vulnerability scanner in fs mode
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          scanners: 'vuln,secret,misconfig'
+          severity: 'CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN'
+          exit-code: '0'                    # allows pipeline to continue
+        env:
+          TRIVY_DEBUG: "true"

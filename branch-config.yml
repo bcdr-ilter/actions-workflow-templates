@@ -1,0 +1,107 @@
+# Simple branch-specific configuration for CI/CD pipelines
+# Replaces hardcoded branch logic in Jenkinsfile and GitHub Actions
+
+branches:
+  main:
+    input_bucket_name: "invent-{{ customer_name }}-input"
+    output_bucket_name: "invent-{{ customer_name }}-output"
+    datastore_bucket_name: "invent-{{ customer_name }}-wba-datastore"
+    pokedex_environment: "wba"
+    rocks_env: "prod"
+    k8s_namespace: "{{ customer_name }}"
+    image_env: "prod"
+    customer_subdomain: "prod"
+    log_level: "INFO"
+    k8s_cluster: prod-eu
+    k8s_cluster_rg: prod-eu-rg
+    k8s_cluster_name: prod-eu
+    maps_database_secret_id: boots-dev-app
+    
+  dev:
+    input_bucket_name: "invent-{{ customer_name }}-input-dev"
+    output_bucket_name: "invent-{{ customer_name }}-output-dev"
+    datastore_bucket_name: "invent-{{ customer_name }}-datastore-dev"
+    pokedex_environment: "dev"
+    rocks_env: "dev"
+    k8s_namespace: "{{ customer_name }}-{{ branch_name }}"
+    image_env: "dev"
+    customer_subdomain: "dev"
+    log_level: "DEBUG"
+    k8s_cluster: prod-eu
+    k8s_cluster_rg: prod-eu-rg
+    maps_database_secret_id: boots-dev-app
+    cloud_provider: azure
+    customer_environment: prod-eu
+
+  uat:
+    input_bucket_name: "invent-{{ customer_name }}-input-uat"
+    output_bucket_name: "invent-{{ customer_name }}-output-uat"
+    datastore_bucket_name: "invent-{{ customer_name }}-datastore-uat"
+    # This needs to be verified with Shield. This might not work in UAT.
+    pokedex_environment: "prod"
+    rocks_env: "prod"
+    k8s_namespace: "{{ customer_name }}-{{ branch_name }}"
+    image_env: "uat"
+    customer_subdomain: "prod"
+    log_level: "INFO"
+    k8s_cluster: prod-eu
+    k8s_cluster_rg: prod-eu-rg
+    # Won't need this for most cases. Just a place holder. Perhaps we can remove it altogether?
+    maps_database_secret_id: "invent-{{ customer_name }}-maps-uat"
+    cloud_provider: azure
+    customer_environment: prod-eu
+
+  feature-ml-feng:
+    input_bucket_name: "invent-{{ customer_name }}-input-uat"
+    output_bucket_name: "invent-{{ customer_name }}-output"
+    datastore_bucket_name: "invent-{{ customer_name }}-datastore"
+    pokedex_environment: "dev"
+    rocks_env: "{{ branch_name }}"
+    k8s_namespace: "{{ customer_name }}-{{ branch_name }}"
+    image_env: "dev"
+    customer_subdomain: "prod"
+    log_level: "DEBUG"
+    k8s_cluster: prod-eu
+    k8s_cluster_rg: prod-eu-rg
+    maps_database_secret_id: boots-dev-app
+    cloud_provider: azure
+    customer_environment: prod-eu
+
+
+    
+  bootsblue:
+    input_bucket_name: "invent-{{ customer_name }}-input"
+    output_bucket_name: "invent-{{ customer_name }}-output"
+    datastore_bucket_name: "invent-{{ customer_name }}-wba-datastore"
+    pokedex_environment: "wba"
+    rocks_env: "{{ branch_name }}"
+    k8s_namespace: "{{ customer_name }}-{{ branch_name }}"
+    image_env: "dev"
+    customer_subdomain: "prod"
+    log_level: "INFO"
+    k8s_cluster: prod-eu
+    k8s_cluster_rg: prod-eu-rg
+    maps_database_secret_id: boots-dev-app
+    cloud_provider: azure
+    customer_environment: prod-eu
+
+
+
+# Default for all other branches
+default:
+  input_bucket_name: "invent-{{ customer_name }}-input-dev"
+  output_bucket_name: "invent-{{ customer_name }}-output-dev"
+  datastore_bucket_name: "invent-{{ customer_name }}-datastore-dev"
+  pokedex_environment: "dev"
+  rocks_env: "{{ branch_name }}"
+  k8s_namespace: "{{ customer_name }}-{{ branch_name }}"
+  image_env: "dev"
+  customer_subdomain: "prod"
+  log_level: "DEBUG"
+  k8s_cluster: prod-eu
+  k8s_cluster_rg: prod-eu-rg
+  maps_database_secret_id: boots-dev-app
+  cloud_provider: azure
+  airflow_version: 2.4.2
+  customer_environment: prod-eu
+  cusomer_name: boots

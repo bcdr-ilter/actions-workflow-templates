@@ -1,0 +1,269 @@
+name: Deploy Airflow Scheduler (Standalone)
+
+on:
+  workflow_call:
+    inputs:
+      airflow-image-version:
+        description: 'Airflow image version'
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ${{ vars.RUNNER_LABEL || 'arc-runner-set-eks' }}
+    env:
+      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+      STORAGE_ACCOUNT_NAME: ${{ vars.STORAGE_ACCOUNT_NAME }}
+      STORAGE_ACCOUNT_ACCESS_KEY: ${{ secrets.STORAGE_ACCOUNT_ACCESS_KEY }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      FERNET_KEY: ${{ secrets.FERNET_KEY }}
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      CUSTOMER_ENVIRONMENT: ${{ vars.CUSTOMER_ENVIRONMENT }}
+      BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Checkout k8s Code
+        uses: actions/checkout@v4
+        with:
+          repository: inventanalytics/airflow-on-k8s-infrastructure
+          path: k8s
+          ref: ${{ vars.AIRFLOW_REPO_REF }}
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Install yq for YAML processing
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Create default branch-config.yml if not exists
+        run: |
+          if [[ ! -f branch-config.yml ]]; then
+            echo "Creating default branch-config.yml"
+            cat > branch-config.yml << 'EOF'
+          branches:
+            main:
+              input_bucket_name: "invent-{{ customer_name }}-input"
+              output_bucket_name: "invent-{{ customer_name }}-output"
+              datastore_bucket_name: "invent-{{ customer_name }}-wba-datastore"
+              pokedex_environment: "wba"
+              rocks_env: "prod"
+              k8s_namespace: "{{ customer_name }}"
+              image_env: "prod"
+              customer_subdomain: "{{ customer_subdomain }}"
+              log_level: "INFO"
+              
+            dev:
+              input_bucket_name: "invent-{{ customer_name }}-input-dev"
+              output_bucket_name: "invent-{{ customer_name }}-output-dev"
+              datastore_bucket_name: "invent-{{ customer_name }}-datastore-dev"
+              pokedex_environment: "dev"
+              rocks_env: "dev"
+              k8s_namespace: "{{ customer_name }}-{{ branch_name }}"
+              image_env: "dev"
+              customer_subdomain: "dev"
+              log_level: "DEBUG"
+
+          default:
+            input_bucket_name: "invent-{{ customer_name }}-input-dev"
+            output_bucket_name: "invent-{{ customer_name }}-output-dev"
+            datastore_bucket_name: "invent-{{ customer_name }}-datastore-dev"
+            pokedex_environment: "dev"
+            rocks_env: "{{ branch_name }}"
+            k8s_namespace: "{{ customer_name }}-{{ branch_name }}"
+            image_env: "dev"
+            customer_subdomain: "dev"
+            log_level: "DEBUG"
+          EOF
+          fi
+
+      - name: Set environment variables from config using shell templating
+        run: |
+          # Set basic variables
+          CURRENT_BRANCH="${{ github.head_ref || github.ref_name }}"
+          CUSTOMER_NAME_LOWER=$(echo "${{ vars.CUSTOMER_NAME }}" | tr '[:upper:]' '[:lower:]')
+          
+          # Template substitution function
+          apply_template() {
+            local template="$1"
+            # Replace template variables
+            template="${template//\{\{ customer_name \}\}/$CUSTOMER_NAME_LOWER}"
+            template="${template//\{\{ branch_name \}\}/$CURRENT_BRANCH}"
+            template="${template//\{\{ customer_subdomain \}\}/${{ vars.CUSTOMER_SUBDOMAIN }}}"
+            template="${template//\{\{ customer_environment \}\}/${{ vars.CUSTOMER_ENVIRONMENT }}}"
+            
+            # Handle conditionals for main branch
+            if [[ "$CURRENT_BRANCH" == "main" ]]; then
+              template="${template//\{\% if customer_environment.startswith\(\'prod\'\) \%\}wba\{\% else \%\}dev\{\% endif \%\}/wba}"
+              template="${template//\{\% if customer_environment == \'prod-us\' \%\}INFO\{\% else \%\}DEBUG\{\% endif \%\}/INFO}"
+            else
+              template="${template//\{\% if customer_environment.startswith\(\'prod\'\) \%\}wba\{\% else \%\}dev\{\% endif \%\}/dev}"
+              template="${template//\{\% if customer_environment == \'prod-us\' \%\}INFO\{\% else \%\}DEBUG\{\% endif \%\}/DEBUG}"
+            fi
+            
+            # Handle customer_subdomain conditional
+            if [[ -n "${{ vars.CUSTOMER_SUBDOMAIN }}" ]]; then
+              template="${template//\{\{ customer_subdomain if customer_subdomain else \'prod\' \}\}/${{ vars.CUSTOMER_SUBDOMAIN }}}"
+            else
+              template="${template//\{\{ customer_subdomain if customer_subdomain else \'prod\' \}\}/prod}"
+            fi
+            
+            # Handle environment conditionals
+            if [[ "${{ vars.CUSTOMER_ENVIRONMENT }}" == "dev" ]]; then
+              template="${template//\{\% if customer_environment == \'dev\' \%\}dev\{\% else \%\}customertest\{\% endif \%\}/dev}"
+            else
+              template="${template//\{\% if customer_environment == \'dev\' \%\}dev\{\% else \%\}customertest\{\% endif \%\}/customertest}"
+            fi
+            
+            echo "$template"
+          }
+          
+          # Check if branch exists in config, otherwise use default
+          if yq e ".branches.\"$CURRENT_BRANCH\"" branch-config.yml | grep -q "null"; then
+            echo "Branch '$CURRENT_BRANCH' not found in config, using default"
+            BRANCH_CONFIG_KEY="default"
+          else
+            echo "Using configuration for branch: $CURRENT_BRANCH"
+            BRANCH_CONFIG_KEY="branches.\"$CURRENT_BRANCH\""
+          fi
+          
+          # Extract and process configuration values
+          INPUT_BUCKET_NAME=$(yq e ".$BRANCH_CONFIG_KEY.input_bucket_name" branch-config.yml)
+          OUTPUT_BUCKET_NAME=$(yq e ".$BRANCH_CONFIG_KEY.output_bucket_name" branch-config.yml)
+          DATASTORE_BUCKET_NAME=$(yq e ".$BRANCH_CONFIG_KEY.datastore_bucket_name" branch-config.yml)
+          POKEDEX_ENVIRONMENT=$(yq e ".$BRANCH_CONFIG_KEY.pokedex_environment" branch-config.yml)
+          ROCKS_ENV=$(yq e ".$BRANCH_CONFIG_KEY.rocks_env" branch-config.yml)
+          K8S_NAMESPACE=$(yq e ".$BRANCH_CONFIG_KEY.k8s_namespace" branch-config.yml)
+          IMAGE_ENV=$(yq e ".$BRANCH_CONFIG_KEY.image_env" branch-config.yml)
+          CUSTOMER_SUBDOMAIN_CONFIG=$(yq e ".$BRANCH_CONFIG_KEY.customer_subdomain" branch-config.yml)
+          LOG_LEVEL=$(yq e ".$BRANCH_CONFIG_KEY.log_level" branch-config.yml)
+          
+          # Apply template processing
+          INPUT_BUCKET_NAME=$(apply_template "$INPUT_BUCKET_NAME")
+          OUTPUT_BUCKET_NAME=$(apply_template "$OUTPUT_BUCKET_NAME")
+          DATASTORE_BUCKET_NAME=$(apply_template "$DATASTORE_BUCKET_NAME")
+          POKEDEX_ENVIRONMENT=$(apply_template "$POKEDEX_ENVIRONMENT")
+          ROCKS_ENV=$(apply_template "$ROCKS_ENV")
+          K8S_NAMESPACE=$(apply_template "$K8S_NAMESPACE")
+          CUSTOMER_SUBDOMAIN_FINAL=$(apply_template "$CUSTOMER_SUBDOMAIN_CONFIG")
+          LOG_LEVEL=$(apply_template "$LOG_LEVEL")
+          
+          # Override with repository variables if they exist
+          if [[ -n "${{ vars.INPUT_BUCKET_NAME }}" ]]; then
+            INPUT_BUCKET_NAME="${{ vars.INPUT_BUCKET_NAME }}"
+          fi
+          if [[ -n "${{ vars.OUTPUT_BUCKET_NAME }}" ]]; then
+            OUTPUT_BUCKET_NAME="${{ vars.OUTPUT_BUCKET_NAME }}"
+          fi
+          if [[ -n "${{ vars.DATASTORE_BUCKET_NAME }}" ]]; then
+            DATASTORE_BUCKET_NAME="${{ vars.DATASTORE_BUCKET_NAME }}"
+          fi
+          
+          # Set Azure subscription ID
+          case "${{ vars.CUSTOMER_ENVIRONMENT }}" in
+            prod-us)
+              echo "AZURE_SUBSCRIPTION_ID=${{ vars.AZURE_SUBSCRIPTION_ID_PROD_US }}" >> $GITHUB_ENV
+              ;;
+            prod-eu)
+              echo "AZURE_SUBSCRIPTION_ID=${{ vars.AZURE_SUBSCRIPTION_ID_PROD_EU }}" >> $GITHUB_ENV
+              ;;
+            dev)
+              echo "AZURE_SUBSCRIPTION_ID=${{ vars.AZURE_SUBSCRIPTION_ID_DEV }}" >> $GITHUB_ENV
+              ;;
+            *)
+              echo "Unknown CUSTOMER_ENVIRONMENT: ${{ vars.CUSTOMER_ENVIRONMENT }}"
+              exit 1
+              ;;
+          esac
+          
+          # Set MAPS_DATABASE_SECRET_ID based on cloud provider and environment
+          if [[ "$CURRENT_BRANCH" == "main" ]]; then
+            SECRET_ENV="prod"
+          else
+            SECRET_ENV="dev"
+          fi
+          
+          if [[ "${{ vars.CLOUD_PROVIDER }}" == "azure" ]]; then
+            MAPS_DATABASE_SECRET_ID="$CUSTOMER_NAME_LOWER-$SECRET_ENV-app"
+          else
+            MAPS_DATABASE_SECRET_ID="$CUSTOMER_NAME_LOWER/$SECRET_ENV/app"
+          fi
+          
+          # Override with repository variable if it exists
+          if [[ -n "${{ vars.MAPS_DATABASE_SECRET_ID }}" ]]; then
+            MAPS_DATABASE_SECRET_ID="${{ vars.MAPS_DATABASE_SECRET_ID }}"
+          fi
+          
+          # Set K8S_CLUSTER based on cloud provider and branch
+          if [[ "${{ vars.CLOUD_PROVIDER }}" == "aws" ]]; then
+            K8S_CLUSTER="${{ vars.K8S_CLUSTER }}"
+          else
+            if [[ "$CURRENT_BRANCH" == "main" ]]; then
+              K8S_CLUSTER="${{ vars.K8S_CLUSTER }}"
+            else
+              if [[ "${{ vars.CUSTOMER_ENVIRONMENT }}" == "dev" ]]; then
+                K8S_CLUSTER="dev"
+              else
+                K8S_CLUSTER="customertest-eu"
+              fi
+            fi
+          fi
+          
+          # Set K8S_CLUSTER_RG
+          if [[ "$CURRENT_BRANCH" == "main" ]]; then
+            K8S_CLUSTER_RG="${{ vars.CUSTOMER_ENVIRONMENT }}-rg"
+          elif [[ "${{ vars.CUSTOMER_ENVIRONMENT }}" == "dev" ]]; then
+            K8S_CLUSTER_RG="dev-rg"
+          else
+            K8S_CLUSTER_RG="prod-eu-rg"
+          fi
+          
+          # Set AZURE_DATABRICKS_CLIENT_ID
+          if [[ -n "${{ secrets.AZURE_DATABRICKS_CLIENT_ID }}" ]]; then
+            echo "AZURE_DATABRICKS_CLIENT_ID=${{ secrets.AZURE_DATABRICKS_CLIENT_ID }}" >> $GITHUB_ENV
+          else
+            echo "AZURE_DATABRICKS_CLIENT_ID=your-client-id" >> $GITHUB_ENV
+          fi
+          
+          # Export all variables to GitHub Environment
+          echo "INPUT_BUCKET_NAME=$INPUT_BUCKET_NAME" >> $GITHUB_ENV
+          echo "OUTPUT_BUCKET_NAME=$OUTPUT_BUCKET_NAME" >> $GITHUB_ENV
+          echo "DATASTORE_BUCKET_NAME=$DATASTORE_BUCKET_NAME" >> $GITHUB_ENV
+          echo "MAPS_DATABASE_SECRET_ID=$MAPS_DATABASE_SECRET_ID" >> $GITHUB_ENV
+          echo "POKEDEX_ENVIRONMENT=$POKEDEX_ENVIRONMENT" >> $GITHUB_ENV
+          echo "ROCKS_ENV=$ROCKS_ENV" >> $GITHUB_ENV
+          echo "K8S_NAMESPACE=$K8S_NAMESPACE" >> $GITHUB_ENV
+          echo "IMAGE_ENV=$IMAGE_ENV" >> $GITHUB_ENV
+          echo "K8S_CLUSTER=$K8S_CLUSTER" >> $GITHUB_ENV
+          echo "K8S_CLUSTER_RG=$K8S_CLUSTER_RG" >> $GITHUB_ENV
+          echo "CUSTOMER_SUBDOMAIN=$CUSTOMER_SUBDOMAIN_FINAL" >> $GITHUB_ENV
+          echo "LOG_LEVEL=$LOG_LEVEL" >> $GITHUB_ENV
+          
+          # Debug output
+          echo "=== Configuration Applied ==="
+          echo "Branch: $CURRENT_BRANCH"
+          echo "Customer Name: $CUSTOMER_NAME_LOWER"
+          echo "Input Bucket: $INPUT_BUCKET_NAME"
+          echo "Output Bucket: $OUTPUT_BUCKET_NAME"
+          echo "Datastore Bucket: $DATASTORE_BUCKET_NAME"
+          echo "Maps Secret: $MAPS_DATABASE_SECRET_ID"
+          echo "Pokedex Environment: $POKEDEX_ENVIRONMENT"
+          echo "Rocks Environment: $ROCKS_ENV"
+          echo "K8S Namespace: $K8S_NAMESPACE"
+          echo "Image Environment: $IMAGE_ENV"
+          echo "K8S Cluster: $K8S_CLUSTER"
+          echo "K8S Cluster RG: $K8S_CLUSTER_RG"
+          echo "Customer Subdomain: $CUSTOMER_SUBDOMAIN_FINAL"
+          echo "Log Level: $LOG_LEVEL"
+
+      - name: Install envsubst
+        run: sudo apt-get update && sudo apt-get install -y gettext
+
+      - name: Setup .env
+        run: |
+          cat .env.tpl | envsubst > .env
+          cat .env
+
+      # ... rest of the workflow steps remain the same as the original
+      # (kubectl setup, cloud provider configuration, deployment steps) 

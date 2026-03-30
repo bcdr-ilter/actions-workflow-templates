@@ -1,0 +1,334 @@
+// Updated Jenkinsfile using configuration-driven approach
+// This replaces the hardcoded switch statement with YAML configuration reading
+
+// parameters
+def CUSTOMER_NAME = "boots"
+def CUSTOMER_ENVIRONMENT = "prod-eu"
+def CUSTOMER_SUBDOMAIN = "prod"
+def CLOUD_PROVIDER = "azure"
+def AIRFLOW_VERSION = "2.4.2"
+
+def COLOR_MAP = ["SUCCESS": "good", "FAILURE": "danger", "UNSTABLE": "warning", "ABORTED": "danger"]
+
+// Function to load and apply branch configuration
+def loadBranchConfig() {
+    def configFile = readFile('branch-config.yml')
+    def config = readYaml text: configFile
+    
+    def branchName = env.BRANCH_NAME
+    def branchConfig = config.branches[branchName] ?: config.default
+    
+    echo "Loading configuration for branch: ${branchName}"
+    echo "Branch config found: ${branchConfig != null}"
+    
+    // Apply variable substitution and set environment variables
+    branchConfig.each { key, value ->
+        if (value instanceof String) {
+            // Apply substitutions
+            value = value.replace('{customer_name}', CUSTOMER_NAME.toLowerCase())
+            value = value.replace('{branch_name}', branchName)
+            value = value.replace('{customer_environment}', CUSTOMER_ENVIRONMENT)
+            value = value.replace('{customer_subdomain}', CUSTOMER_SUBDOMAIN)
+            
+            // Convert to environment variable name format
+            def envVarName = key.toUpperCase()
+            
+            // Set environment variable
+            env."${envVarName}" = value
+            echo "Set ${envVarName} = ${value}"
+        }
+    }
+    
+    // Set additional computed variables
+    env.CUSTOMER_ENVIRONMENT = CUSTOMER_ENVIRONMENT
+    env.AZURE_DATABRICKS_CLIENT_ID = credentials("${CUSTOMER_NAME}_databricks_azure_client_id")
+    
+    // Apply cloud provider specific logic for MAPS_DATABASE_SECRET_ID
+    def secretEnv = (branchName == 'main') ? 'prod' : 'dev'
+    if (CLOUD_PROVIDER == 'azure') {
+        env.MAPS_DATABASE_SECRET_ID = "${CUSTOMER_NAME.toLowerCase()}-${secretEnv}-app"
+    } else {
+        env.MAPS_DATABASE_SECRET_ID = "${CUSTOMER_NAME.toLowerCase()}/${secretEnv}/app"
+    }
+    
+    echo "=== Configuration Applied ==="
+    echo "Branch: ${branchName}"
+    echo "Customer: ${CUSTOMER_NAME}"
+    echo "Input Bucket: ${env.INPUT_BUCKET_NAME}"
+    echo "Output Bucket: ${env.OUTPUT_BUCKET_NAME}"
+    echo "Datastore Bucket: ${env.DATASTORE_BUCKET_NAME}"
+    echo "Maps Secret: ${env.MAPS_DATABASE_SECRET_ID}"
+    echo "Pokedex Environment: ${env.POKEDEX_ENVIRONMENT}"
+    echo "Rocks Environment: ${env.ROCKS_ENV}"
+    echo "K8S Namespace: ${env.K8S_NAMESPACE}"
+    echo "Image Environment: ${env.IMAGE_ENV}"
+}
+
+@NonCPS
+def getChangeString() {
+    MAX_MSG_LEN = 100
+    def changeString = ""
+
+    echo "Gathering SCM changes"
+    def changeLogSets = currentBuild.changeSets
+    for (int i = 0; i < changeLogSets.size(); i++) {
+        def entries = changeLogSets[i].items
+        for (int j = 0; j < entries.length; j++) {
+            def entry = entries[j]
+            truncated_msg = entry.msg.take(MAX_MSG_LEN)
+            changeString += " - ${truncated_msg} [${entry.author}]\n"
+        }
+    }
+
+    if (!changeString) {
+        changeString = " - No new changes"
+    }
+    return changeString
+}
+
+pipeline {
+    agent {
+        dockerfile {
+            filename '.cicd/build/Dockerfile'
+        }
+    }
+    triggers {
+        pollSCM("H/10 * * * *")
+    }
+    options {
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '100'))
+    }
+    stages {
+        stage("Load Configuration") {
+            steps {
+                script {
+                    loadBranchConfig()
+                }
+            }
+        }
+        stage("Create Env Vars") {
+            environment {
+                AZURE_DATABRICKS_CLIENT_ID = credentials("${CUSTOMER_NAME}_databricks_azure_client_id")
+            }
+            steps {
+                sh "cat ${env.WORKSPACE}/.env.tpl | envsubst > ${env.WORKSPACE}/.env"
+            }
+        }
+        stage("Lint") {
+            steps {
+                echo "Linting..."
+                sh 'rm -f flake8.out pylint.out'
+                sh '/build/bin/flake8 --exit-zero --doctests --output-file ./flake8.out'
+                sh '/airflow_build/bin/pylint dags --exit-zero -f parseable > ./pylint.out'
+                sh '/build/bin/pylint scripts --exit-zero -f parseable >> ./pylint.out'
+                sh '/build/bin/pylint rocks_extension --exit-zero -f parseable >> ./pylint.out'
+            }
+        }
+        stage('RecordLint') {
+            steps {
+                recordIssues(
+                    tool: pyLint(pattern: 'pylint.out'),
+                    enabledForFailure: true,
+                    failedTotalAll: 1
+                )
+                recordIssues(
+                    tool: flake8(pattern: 'flake8.out'),
+                    enabledForFailure: true,
+                    failedTotalAll: 1
+                )
+            }
+        }
+        stage("DAG Unit Test") {
+            environment {
+                AIRFLOW__CORE__DAGS_FOLDER = "${env.WORKSPACE}/dags"
+                AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT = 100
+                AIRFLOW__CORE__LOAD_EXAMPLES = "False"
+            }
+            steps {
+                // Airflow setup
+                sh "AIRFLOW__CORE__DAGS_FOLDER='' /airflow_build/bin/airflow db init"
+                sh "cd ${AIRFLOW__CORE__DAGS_FOLDER} && /airflow_build/bin/fabbrica init"
+                // Test
+                sh "/airflow_build/bin/pytest tests/dags"
+            }
+        }
+        stage("Rocks Extension Unit Test") {
+            environment {
+                ENABLE_ROCKS_CONFIG = "TRUE"
+                DB_SERVICE_NAME = "${sh(script: 'echo k8s-db-$(tr -dc \'a-z0-9\' < /dev/urandom | head -c 4)', returnStdout: true).trim()}"
+            }
+            steps {
+                sh '''
+                    sed -i -e "s/k8s-db-backend/${DB_SERVICE_NAME}/" database.yaml
+                    aws eks --region eu-west-1 update-kubeconfig --name jenkins-cluster
+                '''
+                sh 'make prepare-test-environment'
+                sh '/build/bin/pytest tests/rocks_extension'
+                sh 'make remove-test-environment'
+            }
+        }
+        stage("DeployScripts") {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'dev'
+                    branch 'feature*'
+                    branch 'bootsblue'
+                }
+            }
+            environment {
+                DATABRICKS_HOST = credentials("${CUSTOMER_NAME}_databricks_standard_host")
+                DATABRICKS_TOKEN = credentials("${CUSTOMER_NAME}_databricks_standard_token")
+                AZURE_CREDENTIALS = credentials('jenkins_azure_credentials')
+                AZURE_CLIENT_ID = "${AZURE_CREDENTIALS_USR}"
+                AZURE_CLIENT_SECRET = "${AZURE_CREDENTIALS_PSW}"
+                AZURE_TENANT_ID = "5601ab2c-0ffb-47b0-8f77-dab790566623"
+            }
+            steps {
+                script {
+                    if (CLOUD_PROVIDER == "aws") {
+                        sh "aws s3 cp requirements-spark.txt s3://invent-${CUSTOMER_NAME}-datastore/src/${ROCKS_ENV}/requirements_spark.txt"
+                        sh """
+                            aws s3 sync . s3://invent-${CUSTOMER_NAME}-datastore/src/${ROCKS_ENV}/ \
+                                --exclude "*" \
+                                --include "scripts/*" \
+                                --include "rocks_extension/*" \
+                                --include "dags/*" \
+                                --include "module_runner.py" \
+                                --exclude "*__pycache__*" \
+                                --delete
+                        """
+                    } else if (CLOUD_PROVIDER == "azure") {
+                        sh '''
+                            python -m venv venv
+                            . venv/bin/activate
+                            pip install "setuptools<71.0.0" wheel
+                            pip install azure-cli==2.46.0 databricks-cli==0.17.5 urllib3==1.26.15
+                            az login --service-principal --username ${AZURE_CLIENT_ID} --password ${AZURE_CLIENT_SECRET} --tenant ${AZURE_TENANT_ID}
+                            az storage blob upload-batch --account-name inventbootsgrs --source scripts --destination ${DATASTORE_BUCKET_NAME}/src/${ROCKS_ENV}/scripts --auth-mode login --overwrite True
+                            az storage blob upload-batch --account-name inventbootsgrs --source rocks_extension --destination ${DATASTORE_BUCKET_NAME}/src/${ROCKS_ENV}/rocks_extension --auth-mode login --overwrite True
+                            dbfs rm dbfs:/FileStore/src/${ROCKS_ENV}/ --recursive
+                            dbfs cp module_runner.py dbfs:/FileStore/src/${ROCKS_ENV}/module_runner.py --overwrite
+                            dbfs cp scripts/ dbfs:/FileStore/src/${ROCKS_ENV}/scripts/ --recursive --overwrite
+                            dbfs cp rocks_extension/ dbfs:/FileStore/src/${ROCKS_ENV}/rocks_extension/ --recursive --overwrite
+                            dbfs cp requirements-spark.txt dbfs:/FileStore/src/${ROCKS_ENV}/requirements_spark.txt --overwrite
+                        '''
+                    }
+                }
+            }
+        }
+        stage("Build Airflow Scheduler Image") {
+            steps {
+                // build airflow scheduler image
+                echo "Building airflow scheduler image"
+                build (job: "../BootsAirflowScheduler/${env.BRANCH_NAME}",
+                parameters: [
+                    string(name: 'BUILD_NUMBER', value: "${BUILD_NUMBER}"),
+                    string(name: 'BUILD_BRANCH_NAME', value: "${env.BRANCH_NAME}"),
+                ])
+            }
+        }
+        stage("Deploy Airflow Scheduler") {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'dev'
+                    branch 'feature*'
+                    branch 'bootsblue'
+                }
+            }
+            environment {
+                AZURE_SUBSCRIPTION_ID = credentials("azure-${CUSTOMER_ENVIRONMENT}-subscription-id-20221214")
+                AZURE_CREDENTIALS = credentials('jenkins_azure_credentials')
+                AZURE_TENANT_ID = "5601ab2c-0ffb-47b0-8f77-dab790566623"
+                FERNET_KEY = credentials('airflow_on_k8s_fernet_key')
+                SENTRY_DSN = credentials('airflow_sentry_dsn')
+                POSTGRES_CREDENTIALS = credentials('airflow_on_k8s_postgres_credentials')
+            }
+            steps {
+                script {
+                    if (CLOUD_PROVIDER == "aws") {
+                        sh "aws eks --region eu-west-1 update-kubeconfig --name eks-prod"
+                    } else if (CLOUD_PROVIDER == "azure") {
+                        sh """
+                            az login --service-principal --username ${AZURE_CREDENTIALS_USR} --password ${AZURE_CREDENTIALS_PSW} --tenant ${AZURE_TENANT_ID}
+                            az aks get-credentials --subscription ${AZURE_SUBSCRIPTION_ID} --resource-group ${CUSTOMER_ENVIRONMENT}-rg --name ${CUSTOMER_ENVIRONMENT}-aks --admin
+                        """
+                    }
+                }
+                echo "deploying to kubernetes"
+                dir("k8s") {
+                    git credentialsId: "github-alpha-jenkins-pipelines", branch: "latest-nginx-ingress-liveness",
+                        url: "https://github.com/inventanalytics/airflow-on-k8s-infrastructure.git"
+                }
+                sh """
+                    export OIDC_ISSUER=\$(az aks show --subscription $AZURE_SUBSCRIPTION_ID -n $CUSTOMER_ENVIRONMENT-aks -g $CUSTOMER_ENVIRONMENT-rg --query "oidcIssuerProfile.issuerUrl" -otsv)
+                    export IDENTITY_CLIENT_ID=\$(az identity show --subscription $AZURE_SUBSCRIPTION_ID --resource-group $CUSTOMER_NAME-$CUSTOMER_ENVIRONMENT-rg --name $CUSTOMER_NAME-identity --query 'clientId' -otsv)
+
+                    az identity federated-credential create \
+                        --subscription ${AZURE_SUBSCRIPTION_ID} \
+                        --name ${env.K8S_NAMESPACE} \
+                        --identity-name ${CUSTOMER_NAME}-identity \
+                        --resource-group "${CUSTOMER_NAME}-${CUSTOMER_ENVIRONMENT}-rg" \
+                        --issuer \$OIDC_ISSUER \
+                        --subject system:serviceaccount:${env.K8S_NAMESPACE}:${CUSTOMER_NAME}-service-account
+
+                        
+                    sed "s/memory: 2Gi/memory: 4Gi/g" -i k8s/base/airflow-scheduler.yaml
+                    sed 's/cpu: \"1\"/cpu: \"4\"/g' -i k8s/base/airflow-scheduler.yaml
+                    sed 's/cpu: \"0.5\"/cpu: \"2\"/g' -i k8s/base/airflow-scheduler.yaml
+                    sed 's/memory: \"1Gi\"/memory: \"4Gi\"/g' -i k8s/base/airflow-scheduler.yaml
+                    sed 's/memory: \"500M\"/memory: \"2500M\"/g' -i k8s/base/airflow-db.yaml
+                    sed 's/memory: \"2Gi\"/memory: \"4Gi\"/g' -i k8s/base/airflow-db.yaml
+                    sed 's/cpu: \"1\"/cpu: \"2\"/g' -i k8s/base/airflow-db.yaml
+                    
+
+                    /kustomize build k8s/overlays/example-${CLOUD_PROVIDER}/ | \
+                        SCHEDULER_VERSION=${env.BRANCH_NAME}-v${env.BUILD_NUMBER} \
+                        CUSTOMER_NAMESPACE=${env.K8S_NAMESPACE} \
+                        CUSTOMER_SUBDOMAIN=${CUSTOMER_SUBDOMAIN} \
+                        CUSTOMER_IMAGE_NAME=${CUSTOMER_NAME} \
+                        CUSTOMER_NAME=${CUSTOMER_NAME} \
+                        WEB_VERSION=${AIRFLOW_VERSION} \
+                        POSTGRES_USER=${POSTGRES_CREDENTIALS_USR} \
+                        POSTGRES_PASSWORD=${POSTGRES_CREDENTIALS_PSW} \
+                        FERNET_KEY=${FERNET_KEY} \
+                        CUSTOMER_ENVIRONMENT=${CUSTOMER_ENVIRONMENT} \
+                        IMAGE_ENV=${IMAGE_ENV} \
+                        CUSTOMER_REMOTE_BASE_LOG_FOLDER="s3://invent-airflow2-prod-logs/${env.K8S_NAMESPACE}" \
+                        IDENTITY_CLIENT_ID=\$IDENTITY_CLIENT_ID \
+                        envsubst | \
+                        kubectl apply --context ${CUSTOMER_ENVIRONMENT}-aks-admin -f -
+                """
+                // Create environment variables
+                sh "kubectl create configmap env-vars --from-env-file=${env.WORKSPACE}/.env --dry-run=client -o yaml | kubectl apply -f - -n ${K8S_NAMESPACE}"
+                sh """
+                    kubectl get secret airflow-ssh-keys -n ${CUSTOMER_NAME} -o yaml | sed "s/namespace: ${CUSTOMER_NAME}/namespace: ${K8S_NAMESPACE}/"  | kubectl apply --force -f -
+                    kubectl get azureidentity ${CUSTOMER_NAME}-identity -n ${CUSTOMER_NAME} -o yaml | sed "s/namespace: ${CUSTOMER_NAME}/namespace: ${K8S_NAMESPACE}/"  | kubectl apply --force -f -
+                    kubectl get azureidentitybinding ${CUSTOMER_NAME}-identity-binding -n ${CUSTOMER_NAME} -o yaml | sed "s/namespace: ${CUSTOMER_NAME}/namespace: ${K8S_NAMESPACE}/"  | kubectl apply --force -f -
+                """
+            }
+        }
+    }
+    post {
+        always {
+            sh "aws eks --region eu-west-1 update-kubeconfig --name jenkins-cluster"
+            sh "kubectl delete -f ./database.yaml --ignore-not-found=true"
+            script {
+                message = "*${currentBuild.currentResult}:* Job ${env.JOB_NAME} build ${env.BUILD_NUMBER}\n" +
+                          "More info at: ${env.BUILD_URL}\n" +
+                          "Changeset:\n" +
+                          getChangeString()
+                if (env.BRANCH_NAME == 'main' && currentBuild.currentResult != 'SUCCESS')
+                    message = "@here " + message
+
+                slackSend(
+                    channel: "#${CUSTOMER_NAME}-cicd",
+                    color: COLOR_MAP[currentBuild.currentResult],
+                    message: message
+                )
+            }
+        }
+    }
+} 

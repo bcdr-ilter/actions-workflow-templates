@@ -1,0 +1,185 @@
+name: Airflow Image
+
+on:
+  workflow_call:
+    outputs:
+      airflow_image_version:
+        description: 'Generated Airflow image version'
+        value: ${{ jobs.build-push-airflow-image.outputs.airflow_image_version }}
+
+jobs:
+  build-push-airflow-image:
+    name: 'Build and Push Airflow Image to Registry'
+    runs-on: ${{ vars.RUNNER_LABEL || 'arc-runner-set-eks' }}
+    outputs:
+      airflow_image_version: ${{ steps.compute_version.outputs.version }}
+    env:
+      CLOUD_PROVIDER: ${{ vars.CLOUD_PROVIDER }}
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Compute Airflow Image Version (hash-based)
+        id: compute_version
+        run: |
+          dockerfile_hash=$(echo "${{ hashFiles('.cicd/build/Dockerfile.airflow') }}" | cut -c1-8)
+          requirements_hash=$(echo "${{ hashFiles('**/requirements-airflow.txt') }}" | cut -c1-8)
+          dags_hash=$(echo "${{ hashFiles('dags/**') }}" | cut -c1-8)
+          version="${dockerfile_hash}-${requirements_hash}-${dags_hash}"
+          echo "Generated version: $version"
+          echo "version=$version" >> $GITHUB_OUTPUT
+
+      - name: Set Registry Based on Provider
+        run: |
+          if [ "$CLOUD_PROVIDER" == "aws" ]; then
+            echo "REGISTRY=126985841472.dkr.ecr.eu-west-1.amazonaws.com" >> $GITHUB_ENV
+          elif [ "$CLOUD_PROVIDER" == "azure" ]; then
+            echo "REGISTRY=inventkubernetes.azurecr.io" >> $GITHUB_ENV
+          fi
+
+      - name: Set IMAGE_ENV based on Branch
+        run: |
+          if [[ "${GITHUB_REF#refs/heads/}" == "main" ]]; then
+            echo "IMAGE_ENV=prod" >> $GITHUB_ENV
+          elif [[ "${GITHUB_REF#refs/heads/}" == "uat" ]]; then
+            echo "IMAGE_ENV=uat" >> $GITHUB_ENV
+          else
+            echo "IMAGE_ENV=dev" >> $GITHUB_ENV
+          fi
+
+      - name: Install Azure CLI
+        if: vars.CLOUD_PROVIDER == 'azure'
+        run: |
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+
+      - name: Install AWS CLI v2
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip curl
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          sudo ./aws/install
+
+      - name: Azure Login
+        if: vars.CLOUD_PROVIDER == 'azure'
+        run: |
+          echo "Logging in to Azure..."
+          az login --service-principal -u ${{ secrets.AZURE_CLIENT_ID }} -p ${{ secrets.AZURE_CLIENT_SECRET }} --tenant ${{ vars.AZURE_TENANT_ID }}
+
+      - name: Check if Airflow Image Already Exists
+        id: image_check
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ vars.CUSTOMER_NAME }}/${{ env.IMAGE_ENV }}/airflow-scheduler
+          TAG: ${{ steps.compute_version.outputs.version }}
+          CLOUD_PROVIDER: ${{ env.CLOUD_PROVIDER }}
+        run: |
+          echo "Checking for image: $IMAGE_NAME:$TAG"
+      
+          if [[ "$CLOUD_PROVIDER" == "aws" ]]; then
+            echo "Checking image in AWS ECR..."
+            aws ecr describe-images \
+              --repository-name "${{ vars.CUSTOMER_NAME }}/${{ env.IMAGE_ENV }}/airflow-scheduler" \
+              --image-ids imageTag=$TAG \
+              --region ${{ secrets.AWS_REGION }} && echo "exists=true" >> $GITHUB_OUTPUT || echo "exists=false" >> $GITHUB_OUTPUT
+      
+          elif [[ "$CLOUD_PROVIDER" == "azure" ]]; then
+            echo "Checking image in Azure ACR..."
+      
+            REPO="${{ vars.CUSTOMER_NAME }}/${{ env.IMAGE_ENV }}/airflow-scheduler"
+            ACR_NAME="${{ env.REGISTRY }}"  # This is usually something like 'inventkubernetes.azurecr.io'
+      
+            # Extract registry name without domain
+            ACR_NAME_ONLY=$(echo "$ACR_NAME" | cut -d'.' -f1)
+      
+            echo "Repository: $REPO"
+            echo "ACR Name: $ACR_NAME_ONLY"
+      
+            # First, check if repository exists
+            if az acr repository show --name "$ACR_NAME_ONLY" --repository "$REPO" &>/dev/null; then
+              echo "Repository exists, checking for tag '$TAG'..."
+              ACR_OUTPUT=$(az acr repository show-manifests \
+                --name "$ACR_NAME_ONLY" \
+                --repository "$REPO" \
+                --query "[?contains(tags, '$TAG')].digest" \
+                --output tsv)
+      
+              echo "az acr repository show-manifests output:"
+              echo "$ACR_OUTPUT"
+      
+              if [[ -n "$ACR_OUTPUT" ]]; then
+                echo "ACR manifest found: $ACR_OUTPUT"
+                echo "exists=true" >> $GITHUB_OUTPUT
+              else
+                echo "No matching tag found."
+                echo "exists=false" >> $GITHUB_OUTPUT
+              fi
+            else
+              echo "Repository does not exist."
+              echo "exists=false" >> $GITHUB_OUTPUT
+            fi
+          fi
+      
+
+      - name: Configure AWS Credentials
+        if: steps.image_check.outputs.exists == 'false'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+          aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+          aws configure set region $AWS_REGION
+
+      - name: Docker Login (Azure)
+        if: env.CLOUD_PROVIDER == 'azure' && steps.image_check.outputs.exists == 'false'
+        uses: azure/docker-login@v1
+        with:
+          login-server: inventkubernetes.azurecr.io
+          username: ${{ secrets.INVENTKUBERNETES_USERNAME }}
+          password: ${{ secrets.INVENTKUBERNETES_PASSWORD }}
+
+      - name: Docker Login (AWS ECR)
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+        if: steps.image_check.outputs.exists == 'false'
+        run: |
+          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+
+      - name: Set up Docker Buildx
+        if: steps.image_check.outputs.exists == 'false'
+        uses: docker/setup-buildx-action@v3
+        with:
+          install: true
+
+      - name: Cache Docker layers
+        if: steps.image_check.outputs.exists == 'false'
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-airflow-buildx-${{ steps.compute_version.outputs.version }}
+          restore-keys: |
+            ${{ runner.os }}-airflow-buildx-
+
+      - name: Build and Push Airflow Image
+        if: steps.image_check.outputs.exists == 'false'
+        uses: docker/build-push-action@v6
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        with:
+          context: .
+          file: ./.cicd/build/Dockerfile.airflow
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ vars.CUSTOMER_NAME }}/${{ env.IMAGE_ENV }}/airflow-scheduler:${{ steps.compute_version.outputs.version }}
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache,mode=max

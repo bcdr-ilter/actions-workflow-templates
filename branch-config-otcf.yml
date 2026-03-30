@@ -1,0 +1,65 @@
+# OTCF branch-specific configuration for CI/CD pipelines
+# Based on Jenkinsfile_otcf configuration
+
+branches:
+  main:
+    input_bucket_name: "invent-{{ customer_name }}-input"
+    output_bucket_name: "invent-{{ customer_name }}-output"
+    datastore_bucket_name: "invent-{{ customer_name }}-datastore"
+    pokedex_environment: "prod"
+    rocks_env: "prod"
+    k8s_namespace: "{{ customer_name }}"
+    image_env: "prod"
+    customer_subdomain: "prod"
+    log_level: "INFO"
+    k8s_cluster: prod-eu
+    k8s_cluster_rg: prod-eu-rg
+    k8s_cluster_name: prod-eu
+    maps_database_secret_id: otcf-prod-app
+    cloud_provider: azure
+    customer_environment: prod-eu
+    airflow_version: 2.4.2
+    storage_account_name: inventotcf
+    azure_tenant_id: "5601ab2c-0ffb-47b0-8f77-dab790566623"
+    
+  dev:
+    input_bucket_name: "invent-{{ customer_name }}-input-dev"
+    output_bucket_name: "invent-{{ customer_name }}-output-dev"
+    datastore_bucket_name: "invent-{{ customer_name }}-datastore-dev"
+    pokedex_environment: "dev"
+    rocks_env: "dev"
+    k8s_namespace: "{{ customer_name }}-{{ branch_name }}"
+    image_env: "dev"
+    customer_subdomain: "customertest"
+    log_level: "DEBUG"
+    k8s_cluster: customertest-eu
+    k8s_cluster_rg: prod-eu-rg
+    k8s_cluster_name: customertest-eu
+    maps_database_secret_id: otcf-dev-app
+    cloud_provider: azure
+    customer_environment: prod-eu
+    airflow_version: 2.4.2
+    storage_account_name: inventotcf
+    azure_tenant_id: "5601ab2c-0ffb-47b0-8f77-dab790566623"
+
+# Default for all other branches (feature branches)
+default:
+  input_bucket_name: "invent-{{ customer_name }}-input-dev"
+  output_bucket_name: "invent-{{ customer_name }}-output-dev"
+  datastore_bucket_name: "invent-{{ customer_name }}-datastore-dev"
+  pokedex_environment: "dev"
+  rocks_env: "{{ branch_name }}"
+  k8s_namespace: "{{ customer_name }}-{{ branch_name }}"
+  image_env: "dev"
+  customer_subdomain: "customertest"
+  log_level: "DEBUG"
+  k8s_cluster: customertest-eu
+  k8s_cluster_rg: prod-eu-rg
+  k8s_cluster_name: customertest-eu
+  maps_database_secret_id: otcf-dev-app
+  cloud_provider: azure
+  customer_environment: prod-eu
+  airflow_version: 2.4.2
+  storage_account_name: inventotcf
+  azure_tenant_id: "5601ab2c-0ffb-47b0-8f77-dab790566623"
+  customer_name: otcf 

@@ -1,0 +1,287 @@
+name: Deploy Airflow Scheduler (Using Composite Action)
+
+on:
+  workflow_call:
+    inputs:
+      airflow-image-version:
+        description: 'Airflow image version'
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ${{ vars.RUNNER_LABEL || 'arc-runner-set-eks' }}
+    env:
+      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+      STORAGE_ACCOUNT_NAME: ${{ vars.STORAGE_ACCOUNT_NAME }}
+      STORAGE_ACCOUNT_ACCESS_KEY: ${{ secrets.STORAGE_ACCOUNT_ACCESS_KEY }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      FERNET_KEY: ${{ secrets.FERNET_KEY }}
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      CUSTOMER_ENVIRONMENT: ${{ vars.CUSTOMER_ENVIRONMENT }}
+      BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+      CUSTOMER_IDENTITY_RG: ${{ vars.CUSTOMER_IDENTITY_RG || format('{0}-{1}-rg', vars.CUSTOMER_NAME, vars.CUSTOMER_ENVIRONMENT) }}
+      CUSTOMER_IDENTITY_NAME: ${{ vars.CUSTOMER_IDENTITY_NAME || format('{0}-identity', vars.CUSTOMER_NAME) }}
+      DD_API_KEY: ${{ secrets.DD_API_KEY }}
+      DD_APP_KEY: ${{ secrets.DD_APP_KEY }}
+      DD_SITE: ${{ vars.DD_SITE }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+
+      - name: Process Branch Configuration
+        uses: inventanalytics/actions-workflow-templates/.github/actions/process-config@composite-test-airflow-upgrade
+        with:
+          branch-name: ${{ github.head_ref || github.ref_name }}
+          customer-name: ${{ vars.CUSTOMER_NAME }}
+          customer-environment: ${{ vars.CUSTOMER_ENVIRONMENT }}
+          customer-subdomain: ${{ vars.CUSTOMER_SUBDOMAIN }}
+          cloud-provider: ${{ vars.CLOUD_PROVIDER }}
+          airflow-version: ${{ vars.AIRFLOW_VERSION }}
+          airflow-repo-ref: ${{ vars.AIRFLOW_REPO_REF }}
+          k8s-cluster: ${{ vars.K8S_CLUSTER }}
+        env:
+          AZURE_SUBSCRIPTION_ID_PROD_US: ${{ vars.AZURE_SUBSCRIPTION_ID_PROD_US }}
+          AZURE_SUBSCRIPTION_ID_PROD_EU: ${{ vars.AZURE_SUBSCRIPTION_ID_PROD_EU }}
+          AZURE_SUBSCRIPTION_ID_DEV: ${{ vars.AZURE_SUBSCRIPTION_ID_DEV }}
+          AZURE_DATABRICKS_CLIENT_ID: ${{ secrets.AZURE_DATABRICKS_CLIENT_ID }}
+          DD_API_KEY: ${{ secrets.DD_API_KEY }}
+          DD_APP_KEY: ${{ secrets.DD_APP_KEY }}
+          DD_SITE: ${{ vars.DD_SITE }}
+
+      - name: Install envsubst
+        run: sudo apt-get update && sudo apt-get install -y gettext
+
+      - name: Setup .env
+        run: |
+          cat .env.tpl | envsubst > .env
+          cat .env
+
+      # All subsequent steps use the environment variables set by the composite action
+      
+      - name: Verify Configuration (Debug)
+        run: |
+          echo "✅ Configuration verification:"
+          echo "INPUT_BUCKET_NAME: $INPUT_BUCKET_NAME"
+          echo "OUTPUT_BUCKET_NAME: $OUTPUT_BUCKET_NAME"
+          echo "DATASTORE_BUCKET_NAME: $DATASTORE_BUCKET_NAME"
+          echo "K8S_NAMESPACE: $K8S_NAMESPACE"
+          echo "MAPS_DATABASE_SECRET_ID: $MAPS_DATABASE_SECRET_ID"
+          echo "POKEDEX_ENVIRONMENT: $POKEDEX_ENVIRONMENT"
+          echo "ROCKS_ENV: $ROCKS_ENV"
+          echo "K8S_CLUSTER: $K8S_CLUSTER"
+          echo "AIRFLOW_VERSION: $AIRFLOW_VERSION"
+          echo "AIRFLOW_REPO_REF: $AIRFLOW_REPO_REF"
+
+      - name: Checkout k8s Code
+        uses: actions/checkout@v4
+        with:
+          repository: inventanalytics/airflow-on-k8s-infrastructure
+          path: k8s
+          ref: ${{ env.AIRFLOW_REPO_REF }}
+          token: ${{ secrets.GH_PAT }}
+
+      # =============================================================================
+      # DEPLOYMENT STEPS
+      # =============================================================================
+
+      - name: Set up Kubectl
+        if: vars.CLOUD_PROVIDER == 'azure'
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'  # Install the latest version of kubectl
+
+      - name: Install kubectl
+        if: vars.CLOUD_PROVIDER == 'aws'
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+          kubectl version --client
+
+      # Install Kustomize using curl
+      - name: Install Kustomize
+        run: |
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh"  | bash
+
+      # Install AWS CLI v2
+      - name: Install AWS CLI v2
+        if: vars.CLOUD_PROVIDER == 'aws'
+        run: |
+          # Install dependencies for AWS CLI v2
+          sudo apt-get update
+          sudo apt-get install -y unzip curl
+
+          # Download AWS CLI v2 and install it
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          sudo ./aws/install
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        if: vars.CLOUD_PROVIDER == 'aws'
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Configure AWS EKS
+        if: vars.CLOUD_PROVIDER == 'aws'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          aws eks --region ${{ secrets.AWS_REGION }} update-kubeconfig --name ${{ env.K8S_CLUSTER }}-eks
+          aws sts get-caller-identity
+          kubectl config current-context
+          kubectl get ns
+
+      - name: Deploy to AWS Kubernetes
+        if: vars.CLOUD_PROVIDER == 'aws'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+        run: |
+          ./kustomize build k8s/overlays/example-aws/ | \
+            SCHEDULER_VERSION=${{ inputs.airflow-image-version }} \
+            CUSTOMER_NAMESPACE=${{ env.K8S_NAMESPACE }} \
+            CUSTOMER_SUBDOMAIN=${{ env.CUSTOMER_SUBDOMAIN }} \
+            CUSTOMER_IMAGE_NAME=${{ vars.CUSTOMER_NAME }} \
+            CUSTOMER_NAME=${{ vars.CUSTOMER_NAME }} \
+            WEB_VERSION=${{ env.AIRFLOW_VERSION }} \
+            POSTGRES_USER=${{ secrets.POSTGRES_CREDENTIALS_USR }} \
+            POSTGRES_PASSWORD=${{ secrets.POSTGRES_CREDENTIALS_PSW }} \
+            FERNET_KEY=${{ secrets.FERNET_KEY }} \
+            CUSTOMER_ENVIRONMENT=${{ env.CUSTOMER_ENVIRONMENT }} \
+            AWS_ACCOUNT_ID=${{ vars.AWS_ACCOUNT_ID }} \
+            IMAGE_ENV=${{ env.IMAGE_ENV }} \
+            CUSTOMER_REMOTE_BASE_LOG_FOLDER="s3://invent-airflow2-prod-logs/${{ env.K8S_NAMESPACE }}" \
+            envsubst | \
+            kubectl apply -f -
+
+      - name: Create Environment Variables ConfigMap (AWS)
+        if: vars.CLOUD_PROVIDER == 'aws'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          kubectl create configmap env-vars --from-env-file=.env --dry-run=client -o yaml | kubectl apply -f - -n $K8S_NAMESPACE
+
+      - name: Deploy SSH Keys Secret (AWS)
+        if: vars.CLOUD_PROVIDER == 'aws'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          kubectl get secret airflow-ssh-keys -n devops -o yaml | sed "s/devops/$K8S_NAMESPACE/" | kubectl apply -n $K8S_NAMESPACE --force -f -
+
+      - name: Set up Python
+        if: vars.CLOUD_PROVIDER == 'azure'
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'  # Use your desired Python version
+
+      - name: Install Azure CLI 2.73.0 into virtualenv
+        if: vars.CLOUD_PROVIDER == 'azure'
+        run: |
+          python -m venv cli-env
+          ./cli-env/bin/pip install --upgrade pip
+          ./cli-env/bin/pip install azure-cli==2.73.0
+          echo "$GITHUB_WORKSPACE/cli-env/bin" >> $GITHUB_PATH
+
+      - name: Azure Login
+        if: vars.CLOUD_PROVIDER == 'azure'
+        run: |
+          echo "Logging in to Azure..."
+          az login --service-principal -u ${{ secrets.AZURE_CLIENT_ID }} -p ${{ secrets.AZURE_CLIENT_SECRET }} --tenant ${{ vars.AZURE_TENANT_ID }}
+
+      - name: Set up Kubernetes CLI
+        if: vars.CLOUD_PROVIDER == 'azure'
+        run: |
+          az aks get-credentials --subscription ${{ env.AZURE_SUBSCRIPTION_ID }} --resource-group ${{ env.K8S_CLUSTER_RG }} --name ${{ env.K8S_CLUSTER }}-aks --admin
+
+      - name: Configure Kubernetes Secrets (Azure)
+        if: vars.CLOUD_PROVIDER == 'azure'
+        run: |
+          kubectl delete secret ${{ vars.CUSTOMER_NAME }}-storage-secret -n ${{ vars.CUSTOMER_NAME }} --ignore-not-found
+          kubectl create ns ${{ vars.CUSTOMER_NAME }} || true
+          kubectl create secret generic ${{ vars.CUSTOMER_NAME }}-storage-secret -n ${{ vars.CUSTOMER_NAME }} \
+            --from-literal=azurestorageaccountkey=$STORAGE_ACCOUNT_ACCESS_KEY \
+            --from-literal=azurestorageaccountname=$STORAGE_ACCOUNT_NAME
+
+      - name: Deploy to Azure Kubernetes
+        if: vars.CLOUD_PROVIDER == 'azure'
+        shell: bash
+        run: |
+          echo "Fetching OIDC issuer..."
+          OIDC_ISSUER=$(az aks show \
+            --subscription $AZURE_SUBSCRIPTION_ID \
+            -n ${{ env.K8S_CLUSTER }}-aks \
+            -g $K8S_CLUSTER_RG \
+            --query "oidcIssuerProfile.issuerUrl" -o tsv)
+
+          echo "Fetching Managed Identity client ID..."
+          IDENTITY_CLIENT_ID=$(az identity show \
+            --subscription $AZURE_SUBSCRIPTION_ID \
+            --resource-group "${{ env.CUSTOMER_IDENTITY_RG }}" \
+            --name "${{ env.CUSTOMER_IDENTITY_NAME }}" \
+            --query 'clientId' -o tsv)
+
+          SUBJECT="system:serviceaccount:$K8S_NAMESPACE:${{ vars.CUSTOMER_NAME }}-service-account"
+
+          echo "Checking for federated credential with matching issuer + subject..."
+          FC_LIST=$(az identity federated-credential list \
+            --subscription $AZURE_SUBSCRIPTION_ID \
+            --identity-name "${{ env.CUSTOMER_IDENTITY_NAME }}" \
+            --resource-group "${{ env.CUSTOMER_IDENTITY_RG }}" -o json)
+
+          MATCHING_COUNT=$(echo "$FC_LIST" | jq --arg issuer "$OIDC_ISSUER" --arg subject "$SUBJECT" \
+            '[.[] | select(.issuer == $issuer and .subject == $subject)] | length')
+
+          if [ "$MATCHING_COUNT" -eq 0 ]; then
+            echo "Creating federated credential '${K8S_NAMESPACE}-fc'..."
+            az identity federated-credential create \
+              --subscription ${{ env.AZURE_SUBSCRIPTION_ID }} \
+              --name $K8S_NAMESPACE-fc \
+              --identity-name "${{ env.CUSTOMER_IDENTITY_NAME }}" \
+              --resource-group "${{ env.CUSTOMER_IDENTITY_RG }}" \
+              --issuer $OIDC_ISSUER \
+              --subject $SUBJECT
+          else
+            echo "Federated credential with same issuer and subject already exists. Skipping creation."
+          fi
+
+          ./kustomize build k8s/overlays/example-azure/ | \
+            SCHEDULER_VERSION=${{ inputs.airflow-image-version }} \
+            CUSTOMER_NAMESPACE=$K8S_NAMESPACE \
+            CUSTOMER_SUBDOMAIN=${{ env.CUSTOMER_SUBDOMAIN }} \
+            CUSTOMER_IMAGE_NAME=${{ vars.CUSTOMER_NAME }} \
+            CUSTOMER_NAME=${{ vars.CUSTOMER_NAME }} \
+            WEB_VERSION=${{ env.AIRFLOW_VERSION }} \
+            POSTGRES_USER=${{ secrets.POSTGRES_CREDENTIALS_USR }} \
+            POSTGRES_PASSWORD=${{ secrets.POSTGRES_CREDENTIALS_PSW }} \
+            FERNET_KEY=${{ secrets.FERNET_KEY }} \
+            CUSTOMER_ENVIRONMENT=${{ vars.CUSTOMER_ENVIRONMENT }} \
+            DATASTORE_BUCKET_NAME=$DATASTORE_BUCKET_NAME \
+            STORAGE_ACCOUNT_NAME=$STORAGE_ACCOUNT_NAME \
+            IMAGE_ENV=$IMAGE_ENV \
+            CUSTOMER_REMOTE_BASE_LOG_FOLDER="s3://invent-airflow2-prod-logs/$K8S_NAMESPACE" \
+            IDENTITY_CLIENT_ID=$IDENTITY_CLIENT_ID \
+            envsubst | \
+            kubectl apply --context ${{ env.K8S_CLUSTER }}-aks-admin -f -
+
+      - name: Create Environment Variables ConfigMap (Azure)
+        if: vars.CLOUD_PROVIDER == 'azure'
+        run: |
+          kubectl create configmap env-vars --from-env-file=.env --dry-run=client -o yaml | kubectl apply -f - -n $K8S_NAMESPACE
+
+      - name: Deploy SSH Keys Secret (Azure)
+        if: vars.CLOUD_PROVIDER == 'azure'
+        run: |
+          kubectl get secret airflow-ssh-keys -n devops -o yaml | sed "s/devops/$K8S_NAMESPACE/" | kubectl apply -n $K8S_NAMESPACE --force -f -

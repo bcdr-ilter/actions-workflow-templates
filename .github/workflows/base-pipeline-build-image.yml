@@ -1,0 +1,302 @@
+name: Build Base Image and Test
+
+on:
+  workflow_call:
+    inputs:
+      enable_lint:
+        description: 'Enable linting steps'
+        required: false
+        type: string
+        default: 'true'
+      enable_airflow_tests:
+        description: 'Enable Airflow unit test steps'
+        required: false
+        type: string
+        default: 'true'
+      enable_rocks_tests:
+        description: 'Enable Rocks unit test steps'
+        required: false
+        type: string
+        default: 'true'
+      enable_metadata_check:
+        description: 'Enable metadata check steps'
+        required: false
+        type: string
+        default: 'true'
+
+      
+
+jobs:
+
+  build_base_image:
+    name: 'Build and Push Base Image'
+    runs-on: ${{ vars.RUNNER_LABEL || 'arc-runner-set-eks' }}
+    defaults:
+      run:
+        shell: bash
+
+    outputs:
+      image_tag: ${{ steps.compute_tag.outputs.image_tag }}
+      image_exists: ${{ steps.check_image.outputs.exists }}
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Compute image tag
+      id: compute_tag
+      run: |
+        # Shorten Dockerfile hash to the first 8 characters
+        DOCKERFILE_HASH=$(sha256sum .cicd/build/Dockerfile | awk '{print substr($1, 1, 8)}')
+        
+        # Shorten requirements hash to the first 8 characters
+        REQ_HASH=$(sha256sum requirements-*.txt | sha256sum | awk '{print substr($1, 1, 8)}')
+        DAGS_HASH=$(echo "${{ hashFiles('dags/**') }}" | cut -c1-8)
+        # Construct the tag with shortened hashes
+        TAG="${DOCKERFILE_HASH}-${REQ_HASH}-${DAGS_HASH}"
+        
+        # Output the computed image tag for use in other steps
+        echo "image_tag=$TAG" >> $GITHUB_OUTPUT
+
+    - name: Check if image already exists in ACR
+      id: check_image
+      run: |
+        docker login inventkubernetes.azurecr.io -u ${{ secrets.INVENTKUBERNETES_USERNAME }} -p ${{ secrets.INVENTKUBERNETES_PASSWORD }}
+        if docker manifest inspect inventkubernetes.azurecr.io/base-images/pipeline-build-image:${{ steps.compute_tag.outputs.image_tag }} > /dev/null 2>&1; then
+          echo "exists=true" >> $GITHUB_OUTPUT
+          echo "Image already exists. Skipping build."
+        else
+          echo "exists=false" >> $GITHUB_OUTPUT
+          echo "Image does not exist. Will build."
+        fi
+
+    - name: 'Docker Login'
+      uses: azure/docker-login@v1
+      with:
+        login-server: ${{ secrets.REGISTRY_LOGIN_SERVER }}
+        username: ${{ secrets.REGISTRY_USERNAME }}
+        password: ${{ secrets.REGISTRY_PASSWORD }}
+
+    # - name: Configure AWS Credentials
+    #   if: steps.check_image.outputs.exists == 'false'
+    #   env:
+    #     AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+    #     AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    #     AWS_REGION: ${{ secrets.AWS_REGION }}
+    #   run: |
+    #     aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+    #     aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+    #     aws configure set region $AWS_REGION
+
+
+      # Install AWS CLI v2
+    - name: Install AWS CLI v2
+      if: steps.check_image.outputs.exists == 'false'
+      run: |
+        # Install dependencies for AWS CLI v2
+        sudo apt-get update
+        sudo apt-get install -y unzip curl
+
+        # Download AWS CLI v2 and install it
+        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+        unzip awscliv2.zip
+        sudo ./aws/install
+
+    - name: 'Docker Login'
+      if: steps.check_image.outputs.exists == 'false'
+      uses: azure/docker-login@v1
+      with:
+        login-server: ${{ secrets.REGISTRY_LOGIN_SERVER }}
+        username: ${{ secrets.REGISTRY_USERNAME }}
+        password: ${{ secrets.REGISTRY_PASSWORD }}
+
+    - name: Configure AWS Credentials
+      if: steps.check_image.outputs.exists == 'false'
+      uses: aws-actions/configure-aws-credentials@v3
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+
+    - name: Log in to Amazon ECR
+      if: steps.check_image.outputs.exists == 'false'
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+      with:
+        region: ${{ secrets.AWS_REGION }}
+
+    - name: Log in to Azure CR
+      if: steps.check_image.outputs.exists == 'false'
+      run: |
+        # echo "Logging into Amazon ECR..."
+        # aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+        docker login inventkubernetes.azurecr.io --username ${{ secrets.AZURE_CLIENT_ID }} --password ${{ secrets.AZURE_CLIENT_SECRET }}
+
+    - name: Set up Docker Buildx
+      if: steps.check_image.outputs.exists == 'false'
+      uses: docker/setup-buildx-action@v3
+      with:
+        install: true
+
+    - name: Cache Docker layers
+      if: steps.check_image.outputs.exists == 'false'
+      uses: actions/cache@v4
+      with:
+        path: /tmp/.buildx-cache
+        key: ${{ runner.os }}-buildx-${{ steps.compute_tag.outputs.image_tag }}
+        restore-keys: |
+          ${{ runner.os }}-buildx-
+
+    - name: Build and push build image
+      if: steps.check_image.outputs.exists == 'false'
+      env:
+        AWS_REGION: ${{ secrets.AWS_REGION }}
+        AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: ./.cicd/build/Dockerfile
+        push: true
+        tags: inventkubernetes.azurecr.io/base-images/pipeline-build-image:${{ steps.compute_tag.outputs.image_tag }}
+        cache-from: type=local,src=/tmp/.buildx-cache
+        cache-to: type=local,dest=/tmp/.buildx-cache,mode=max
+
+
+  ci-pipeline:
+    needs: build_base_image
+    runs-on: ${{ vars.RUNNER_LABEL || 'arc-runner-set-eks' }}
+    container:
+      image: inventkubernetes.azurecr.io/base-images/pipeline-build-image:${{ needs.build_base_image.outputs.image_tag }}
+      options: --user root
+      credentials:
+        username: ${{ secrets.INVENTKUBERNETES_USERNAME }}
+        password: ${{ secrets.INVENTKUBERNETES_PASSWORD }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+      STORAGE_ACCOUNT_NAME: ${{ vars.STORAGE_ACCOUNT_NAME }}
+      STORAGE_ACCOUNT_ACCESS_KEY: ${{ secrets.STORAGE_ACCOUNT_ACCESS_KEY }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      FERNET_KEY: ${{ secrets.FERNET_KEY }}
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      CUSTOMER_ENVIRONMENT: ${{ vars.CUSTOMER_ENVIRONMENT }}
+      BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+
+      - name: Process branch configuration
+        uses: inventanalytics/actions-workflow-templates/.github/actions/process-config@composite-test-airflow-upgrade
+        with:
+          branch-name: ${{ github.head_ref || github.ref_name }}
+          customer-name: ${{ vars.CUSTOMER_NAME }}
+          customer-environment: ${{ vars.CUSTOMER_ENVIRONMENT }}
+          customer-subdomain: ${{ vars.CUSTOMER_SUBDOMAIN }}
+          cloud-provider: ${{ vars.CLOUD_PROVIDER }}
+          airflow-version: ${{ vars.AIRFLOW_VERSION }}
+          airflow-repo-ref: ${{ vars.AIRFLOW_REPO_REF || 'latest-nginx-ingress-liveness' }}
+          k8s-cluster: ${{ vars.K8S_CLUSTER }}
+
+
+      
+
+      - name: Verify Configuration (Debug)
+        run: |
+          echo "✅ Configuration verification:"
+          echo "INPUT_BUCKET_NAME: $INPUT_BUCKET_NAME"
+          echo "OUTPUT_BUCKET_NAME: $OUTPUT_BUCKET_NAME"
+          echo "DATASTORE_BUCKET_NAME: $DATASTORE_BUCKET_NAME"
+          echo "K8S_NAMESPACE: $K8S_NAMESPACE"
+          echo "MAPS_DATABASE_SECRET_ID: $MAPS_DATABASE_SECRET_ID"
+          echo "POKEDEX_ENVIRONMENT: $POKEDEX_ENVIRONMENT"
+          echo "ROCKS_ENV: $ROCKS_ENV"
+          echo "K8S_CLUSTER: $K8S_CLUSTER"
+
+      - name: Setup
+        run: |
+          cp -r . /opt/app
+          ls /opt/app
+
+      - name: Verify Python Environment
+        run: |
+          echo "=== Python Environment Verification ==="
+          echo "System Python: $(python --version)"
+          echo "Build Python: $(/build/bin/python --version)"
+          echo "Airflow Python: $(/airflow_build/bin/python --version)"
+          echo "PYSPARK_PYTHON: $PYSPARK_PYTHON"
+          echo "PYSPARK_DRIVER_PYTHON: $PYSPARK_DRIVER_PYTHON"
+          echo "PYTHONPATH: $PYTHONPATH"
+          echo "====================================="
+
+      - name: Lint
+        if: inputs.enable_lint == 'true'
+        continue-on-error: true
+        run: |
+          rm -f flake8.out pylint.out
+          /build/bin/flake8 --exit-zero --doctests
+          /airflow_build/bin/pylint dags --exit-zero
+          /build/bin/pylint scripts --exit-zero
+          /build/bin/pylint rocks_extension --exit-zero
+
+      - name: Run Airflow Unit Tests
+        if: inputs.enable_airflow_tests == 'true'
+        run: |
+          cd /opt/app
+          export AIRFLOW__CORE__DAGS_FOLDER=/opt/app/dags
+          export AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT=100
+          export AIRFLOW__CORE__LOAD_EXAMPLES="False"
+          AIRFLOW__CORE__DAGS_FOLDER='' /airflow_build/bin/airflow db init
+          cd dags && /airflow_build/bin/fabbrica init && cd ..
+          /airflow_build/bin/pytest --log-cli-level=WARNING tests/dags
+
+      - name: Run Rocks Unit Tests
+        if: inputs.enable_rocks_tests == 'true'
+        run: |
+          # Set PySpark to use the same Python as the build environment
+          export PYSPARK_PYTHON=/build/bin/python
+          export PYSPARK_DRIVER_PYTHON=/build/bin/python
+          /build/bin/pytest tests/rocks_extension
+
+      - name: Configure AWS Credentials
+        run: |
+          echo "Configuring AWS credentials..."
+          echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> $GITHUB_ENV
+          echo "AWS_REGION=${{ secrets.AWS_REGION }}" >> $GITHUB_ENV
+          echo "AWS_ACCOUNT_ID=${{ secrets.AWS_ACCOUNT_ID }}" >> $GITHUB_ENV
+
+      - name: Install Shield CLI
+        if: inputs.enable_metadata_check == 'true'
+        run: |
+          # Install uv
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          
+          # Create venv and install shield-cli
+          uv venv .shield-venv
+          source .shield-venv/bin/activate
+          # Install invent-rocks-opal from requirements-spark.txt if it exists
+          if [ -f "requirements-spark.txt" ]; then
+            OPAL_VERSION=$(grep -E "^invent-rocks\.opal" requirements-spark.txt | sed -E 's/.*==([0-9.]+).*/\1/')
+            if [ -n "$OPAL_VERSION" ]; then
+              echo "OPAL_VERSION=$OPAL_VERSION" >> $GITHUB_ENV
+            fi
+          fi
+          uv pip install setuptools==65.6.3
+          uv pip install --pre invent-shield-cli --extra-index-url https://pypi.euwest1.prod.inventanalytics.com/
+
+      - name: Pokedex Metadata Check
+        if: inputs.enable_metadata_check == 'true'
+        continue-on-error: true
+        run: |
+          if [ -n "$OPAL_VERSION" ]; then
+            .shield-venv/bin/shield pokedex migration --customer ${{ vars.CUSTOMER_NAME }} --environment $POKEDEX_ENVIRONMENT --opal-version $OPAL_VERSION
+          else
+            .shield-venv/bin/shield pokedex migration --customer ${{ vars.CUSTOMER_NAME }} --environment $POKEDEX_ENVIRONMENT
+          fi

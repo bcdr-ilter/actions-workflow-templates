@@ -215,6 +215,23 @@ jobs:
             --from-literal=azurestorageaccountkey=$STORAGE_ACCOUNT_ACCESS_KEY \
             --from-literal=azurestorageaccountname=$STORAGE_ACCOUNT_NAME
 
+      - name: Configure Airflow LDAP Auth (Azure)
+        if: vars.CLOUD_PROVIDER == 'azure'
+        run: |
+          AD_DNS_IP=${{ vars.AD_DNS_IP || '10.100.30.17' }}
+          AD_DOMAIN_PREFIX=${{ vars.AD_DOMAIN_PREFIX || 'bcdr' }}
+          AD_BIND_PASSWORD=${{ secrets.AD_BIND_PASSWORD || 'Bcdr2026!' }}
+
+          cat k8s/overlays/example-azure/webserver_config.py | \
+            AD_DNS_IP=$AD_DNS_IP \
+            AD_DOMAIN_PREFIX=$AD_DOMAIN_PREFIX \
+            AD_BIND_PASSWORD=$AD_BIND_PASSWORD \
+            envsubst > /tmp/webserver_config.py
+
+          kubectl create configmap airflow-webserver-config -n $K8S_NAMESPACE \
+            --from-file=webserver_config.py=/tmp/webserver_config.py \
+            --dry-run=client -o yaml | kubectl apply -f -
+
       - name: Deploy to Azure Kubernetes
         if: vars.CLOUD_PROVIDER == 'azure'
         shell: bash

@@ -25,7 +25,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Process Configuration
-        uses: inventanalytics/actions-workflow-templates/.github/actions/process-config@main
+        uses: invent-ai/actions-workflow-templates/.github/actions/process-config@composite-test
         with:
           branch-name: ${{ github.ref_name }}
           customer-name: ${{ vars.CUSTOMER_NAME }}

@@ -193,7 +193,7 @@ jobs:
 
 
       - name: Process branch configuration
-        uses: inventanalytics/actions-workflow-templates/.github/actions/process-config@composite-test-airflow-upgrade
+        uses: invent-ai/actions-workflow-templates/.github/actions/process-config@composite-test
         with:
           branch-name: ${{ github.head_ref || github.ref_name }}
           customer-name: ${{ vars.CUSTOMER_NAME }}
@@ -290,7 +290,7 @@ jobs:
             fi
           fi
           uv pip install setuptools==65.6.3
-          uv pip install --pre invent-shield-cli --extra-index-url https://pypi.euwest1.prod.inventanalytics.com/
+          uv pip install --pre invent-shield-cli --extra-index-url http://internal-pypi-server-alb-9235208.eu-west-1.elb.amazonaws.com/simple/
 
       - name: Pokedex Metadata Check
         if: inputs.enable_metadata_check == 'true'

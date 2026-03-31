@@ -33,7 +33,7 @@ jobs:
         run: |
           python -m venv $HOME/spark_env
           $HOME/spark_env/bin/python -m pip install --upgrade pip
-          $HOME/spark_env/bin/python -m pip install --no-cache-dir --index-url https://pypi.euwest1.prod.inventanalytics.com/ -r requirements-spark.txt
+          $HOME/spark_env/bin/python -m pip install --no-cache-dir --index-url http://internal-pypi-server-alb-9235208.eu-west-1.elb.amazonaws.com/simple/ -r requirements-spark.txt
           $HOME/spark_env/bin/python -m pip install pytest  # Install pytest in the Spark environment
 
       # Set up Python environment for Airflow
@@ -48,7 +48,7 @@ jobs:
           $HOME/airflow_env/bin/python -m pip install --upgrade pip
           $HOME/airflow_env/bin/python -m pip install --no-cache-dir "apache-airflow[amazon]==2.4.2" \
             -c https://raw.githubusercontent.com/invent-analytics/airflow-constraints/main/2.4.2/constraints-3.8.txt
-          $HOME/airflow_env/bin/python -m pip install --no-cache-dir --index-url https://pypi.euwest1.prod.inventanalytics.com/ -r requirements-airflow.txt
+          $HOME/airflow_env/bin/python -m pip install --no-cache-dir --index-url http://internal-pypi-server-alb-9235208.eu-west-1.elb.amazonaws.com/simple/ -r requirements-airflow.txt
           $HOME/airflow_env/bin/python -m pip install pytest  # Install pytest in the Airflow environment
 
       # Run tests for Spark environment

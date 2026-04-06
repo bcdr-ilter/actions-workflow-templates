@@ -127,25 +127,33 @@ jobs:
           az storage blob upload-batch --account-name ${{ env.STORAGE_ACCOUNT_NAME }} --source scripts --destination $DATASTORE_BUCKET_NAME/src/${{ env.ROCKS_ENV }}/scripts --auth-mode login --overwrite True
           az storage blob upload-batch --account-name ${{ env.STORAGE_ACCOUNT_NAME }} --source rocks_extension --destination $DATASTORE_BUCKET_NAME/src/${{ env.ROCKS_ENV }}/rocks_extension --auth-mode login --overwrite True
 
-      - name: Databricks DBFS Upload (Azure)
+      - name: Databricks Workspace Upload (Azure)
         if: vars.CLOUD_PROVIDER == 'azure'
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          # . venv/bin/activate
-          echo "Removing old files from DBFS..."
-          databricks fs rm dbfs:/FileStore/src/${{ env.ROCKS_ENV }}/ --recursive || true
-          echo "Creating DBFS directory if not exists..."
-          databricks fs mkdirs dbfs:/FileStore/src/${{ env.ROCKS_ENV }}/scripts/
-          databricks fs mkdirs dbfs:/FileStore/src/${{ env.ROCKS_ENV }}/rocks_extension/
-          databricks fs mkdirs dbfs:/FileStore/src/${{ env.ROCKS_ENV }}/
-          echo "Uploading files to DBFS..."
-          databricks fs cp module_runner.py dbfs:/FileStore/src/${{ env.ROCKS_ENV }}/module_runner.py --overwrite
-          databricks fs cp scripts/ dbfs:/FileStore/src/${{ env.ROCKS_ENV }}/scripts/ --recursive --overwrite
-          databricks fs cp rocks_extension/ dbfs:/FileStore/src/${{ env.ROCKS_ENV }}/rocks_extension/ --recursive --overwrite
-          databricks fs cp internal-packages.lock dbfs:/FileStore/src/${{ env.ROCKS_ENV }}/internal_packages.lock --overwrite
-          databricks fs cp requirements-spark.txt dbfs:/FileStore/src/${{ env.ROCKS_ENV }}/requirements_spark.txt --overwrite
+          # DBFS root is disabled on UC-enabled workspaces — use Workspace files instead
+          DEST="/Workspace/FileStore/src/${{ env.ROCKS_ENV }}"
+          echo "Removing old files from Workspace..."
+          databricks workspace delete "$DEST" --recursive 2>/dev/null || true
+          echo "Creating Workspace directories..."
+          databricks workspace mkdirs "$DEST/scripts"
+          databricks workspace mkdirs "$DEST/rocks_extension"
+          echo "Uploading files to Workspace..."
+          databricks workspace import "$DEST/module_runner.py" --file module_runner.py --format AUTO --overwrite
+          for f in $(find scripts -type f); do
+            dir=$(dirname "$f")
+            databricks workspace mkdirs "$DEST/$dir" 2>/dev/null || true
+            databricks workspace import "$DEST/$f" --file "$f" --format AUTO --overwrite
+          done
+          for f in $(find rocks_extension -type f); do
+            dir=$(dirname "$f")
+            databricks workspace mkdirs "$DEST/$dir" 2>/dev/null || true
+            databricks workspace import "$DEST/$f" --file "$f" --format AUTO --overwrite
+          done
+          databricks workspace import "$DEST/internal_packages.lock" --file internal-packages.lock --format AUTO --overwrite
+          databricks workspace import "$DEST/requirements_spark.txt" --file requirements-spark.txt --format AUTO --overwrite
 
       # - name: Install Databricks CLI (AWS Only)
       #   if: vars.CLOUD_PROVIDER == 'aws'  # Only runs if CLOUD_PROVIDER is 'aws'

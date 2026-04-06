@@ -159,7 +159,7 @@ jobs:
             CUSTOMER_ENVIRONMENT=${{ env.CUSTOMER_ENVIRONMENT }} \
             AWS_ACCOUNT_ID=${{ vars.AWS_ACCOUNT_ID }} \
             IMAGE_ENV=${{ env.IMAGE_ENV }} \
-            CUSTOMER_REMOTE_BASE_LOG_FOLDER="s3://invent-airflow2-prod-logs/${{ env.K8S_NAMESPACE }}" \
+            CUSTOMER_REMOTE_BASE_LOG_FOLDER="s3://invent-${{ env.CUSTOMER_SUBDOMAIN }}-airflow2-prod-logs/${{ env.K8S_NAMESPACE }}" \
             envsubst | \
             kubectl apply -f -
 
@@ -289,7 +289,7 @@ jobs:
             STORAGE_ACCOUNT_NAME=$STORAGE_ACCOUNT_NAME \
             IMAGE_ENV=$IMAGE_ENV \
             ACR_LOGIN_SERVER=${{ vars.ACR_LOGIN_SERVER || 'inventkubernetesbcdr.azurecr.io' }} \
-            CUSTOMER_REMOTE_BASE_LOG_FOLDER="s3://invent-bcdr-airflow2-prod-logs/$K8S_NAMESPACE" \
+            CUSTOMER_REMOTE_BASE_LOG_FOLDER="s3://invent-${CUSTOMER_SUBDOMAIN}-airflow2-prod-logs/$K8S_NAMESPACE" \
             IDENTITY_CLIENT_ID=$IDENTITY_CLIENT_ID \
             envsubst | \
             kubectl apply --context ${{ env.K8S_CLUSTER }}-aks-admin -f -

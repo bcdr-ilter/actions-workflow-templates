@@ -79,6 +79,14 @@ jobs:
           echo "AIRFLOW_VERSION: $AIRFLOW_VERSION"
           echo "AIRFLOW_REPO_REF: $AIRFLOW_REPO_REF"
 
+      - name: Debug secret visibility
+        run: |
+          echo "GH_APP_ID length: ${#GH_APP_ID_VAL}"
+          echo "GH_APP_PRIVATE_KEY length: ${#GH_APP_PK_VAL}"
+        env:
+          GH_APP_ID_VAL: ${{ secrets.GH_APP_ID }}
+          GH_APP_PK_VAL: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
       - name: Mint cross-repo token for k8s infra checkout
         id: k8s_token
         uses: actions/create-github-app-token@v1

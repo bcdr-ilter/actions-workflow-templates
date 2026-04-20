@@ -68,45 +68,14 @@ jobs:
           echo "Image does not exist. Will build."
         fi
 
-    - name: 'Docker Login'
-      uses: azure/docker-login@v1
-      with:
-        login-server: ${{ secrets.REGISTRY_LOGIN_SERVER }}
-        username: ${{ secrets.REGISTRY_USERNAME }}
-        password: ${{ secrets.REGISTRY_PASSWORD }}
-
-    # - name: Configure AWS Credentials
-    #   if: steps.check_image.outputs.exists == 'false'
-    #   env:
-    #     AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-    #     AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-    #     AWS_REGION: ${{ secrets.AWS_REGION }}
-    #   run: |
-    #     aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
-    #     aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
-    #     aws configure set region $AWS_REGION
-
-
-      # Install AWS CLI v2
     - name: Install AWS CLI v2
       if: steps.check_image.outputs.exists == 'false'
       run: |
-        # Install dependencies for AWS CLI v2
         sudo apt-get update
         sudo apt-get install -y unzip curl
-
-        # Download AWS CLI v2 and install it
         curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
         unzip awscliv2.zip
         sudo ./aws/install --update || sudo ./aws/install
-
-    - name: 'Docker Login'
-      if: steps.check_image.outputs.exists == 'false'
-      uses: azure/docker-login@v1
-      with:
-        login-server: ${{ secrets.REGISTRY_LOGIN_SERVER }}
-        username: ${{ secrets.REGISTRY_USERNAME }}
-        password: ${{ secrets.REGISTRY_PASSWORD }}
 
     - name: Configure AWS Credentials
       if: vars.CLOUD_PROVIDER == 'aws' && steps.check_image.outputs.exists == 'false'

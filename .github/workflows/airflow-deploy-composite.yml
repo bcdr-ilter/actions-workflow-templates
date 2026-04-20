@@ -31,7 +31,7 @@ jobs:
 
 
       - name: Process Branch Configuration
-        uses: invent-ai/actions-workflow-templates/.github/actions/process-config@composite-test
+        uses: bcdr-ilter/actions-workflow-templates/.github/actions/process-config@composite-test
         with:
           branch-name: ${{ github.head_ref || github.ref_name }}
           customer-name: ${{ vars.CUSTOMER_NAME }}
@@ -77,7 +77,7 @@ jobs:
       - name: Checkout k8s Code
         uses: actions/checkout@v4
         with:
-          repository: invent-ai/airflow-on-k8s-infrastructure
+          repository: bcdr-ilter/airflow-on-k8s-infrastructure
           path: k8s
           ref: ${{ env.AIRFLOW_REPO_REF }}
           token: ${{ secrets.GH_PAT }}
@@ -291,6 +291,7 @@ jobs:
             ACR_LOGIN_SERVER=${{ vars.ACR_LOGIN_SERVER || 'inventkubernetesbcdr.azurecr.io' }} \
             CUSTOMER_REMOTE_BASE_LOG_FOLDER="s3://invent-${CUSTOMER_SUBDOMAIN}-airflow2-prod-logs/$K8S_NAMESPACE" \
             IDENTITY_CLIENT_ID=$IDENTITY_CLIENT_ID \
+            AZURE_TENANT_ID=${{ vars.AZURE_TENANT_ID }} \
             envsubst | \
             kubectl apply --context ${{ env.K8S_CLUSTER }}-aks-admin -f -
 

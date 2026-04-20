@@ -23,6 +23,11 @@ on:
         required: false
         type: string
         default: 'true'
+      acr_login_server:
+        description: 'ACR login server. Caller passes vars.ACR_LOGIN_SERVER — vars context does not inherit into nested reusable workflows, so the top-level caller must forward it.'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   tests:
@@ -33,6 +38,7 @@ jobs:
       enable_airflow_tests: ${{ inputs.enable_airflow_tests }}
       enable_rocks_tests: ${{ inputs.enable_rocks_tests }}
       enable_metadata_check: ${{ inputs.enable_metadata_check }}
+      acr_login_server: ${{ inputs.acr_login_server }}
 
   deploy_scripts:
     if: |
@@ -53,6 +59,8 @@ jobs:
   build-and-push-airflow-image:
     uses: ./.github/workflows/airflow-image.yml
     secrets: inherit
+    with:
+      acr_login_server: ${{ inputs.acr_login_server }}
 
   deploy-airflow-image:
     if: |
@@ -67,12 +75,13 @@ jobs:
       github.ref == 'refs/heads/uat' ||
       github.head_ref == 'uat'
     uses: ./.github/workflows/airflow-deploy-composite.yml
-    needs: 
+    needs:
       - build-and-push-airflow-image
       - tests
     secrets: inherit
     with:
       airflow-image-version: ${{ needs.build-and-push-airflow-image.outputs.airflow_image_version }}
+      acr_login_server: ${{ inputs.acr_login_server }}
 
   code-scan:
     name: Code Scanning

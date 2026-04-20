@@ -23,8 +23,11 @@ on:
         required: false
         type: string
         default: 'true'
-
-      
+      acr_login_server:
+        description: 'ACR login server, e.g. inventkubernetesbcdr2.azurecr.io. Caller passes vars.ACR_LOGIN_SERVER (which resolves at caller level where nested vars context is not inherited).'
+        required: false
+        type: string
+        default: ''
 
 jobs:
 
@@ -36,9 +39,9 @@ jobs:
         shell: bash
 
     outputs:
-      image_tag: ${{ steps.compute_tag.outputs.image_tag }}
+      image_tag:    ${{ steps.compute_tag.outputs.image_tag }}
       image_exists: ${{ steps.check_image.outputs.exists }}
-      registry:   ${{ steps.compute_tag.outputs.registry }}
+      registry:     ${{ inputs.acr_login_server }}
 
     steps:
     - name: Checkout Repository
@@ -46,29 +49,18 @@ jobs:
 
     - name: Compute image tag
       id: compute_tag
-      env:
-        ACR_NAME: ${{ secrets.INVENTKUBERNETES_USERNAME }}
       run: |
-        # Shorten Dockerfile hash to the first 8 characters
         DOCKERFILE_HASH=$(sha256sum .cicd/build/Dockerfile | awk '{print substr($1, 1, 8)}')
-
-        # Shorten requirements hash to the first 8 characters
         REQ_HASH=$(sha256sum requirements-*.txt | sha256sum | awk '{print substr($1, 1, 8)}')
         DAGS_HASH=$(echo "${{ hashFiles('dags/**') }}" | cut -c1-8)
-        # Construct the tag with shortened hashes
         TAG="${DOCKERFILE_HASH}-${REQ_HASH}-${DAGS_HASH}"
-
-        # Output the computed image tag for use in other steps
         echo "image_tag=$TAG" >> $GITHUB_OUTPUT
-        # ACR admin username == ACR name; expose login server for downstream jobs
-        # (container.image cannot reference secrets directly, so we output it here)
-        echo "registry=${ACR_NAME}.azurecr.io" >> $GITHUB_OUTPUT
 
     - name: Check if image already exists in ACR
       id: check_image
       run: |
-        docker login ${{ secrets.INVENTKUBERNETES_USERNAME }}.azurecr.io -u ${{ secrets.INVENTKUBERNETES_USERNAME }} -p ${{ secrets.INVENTKUBERNETES_PASSWORD }}
-        if docker manifest inspect ${{ secrets.INVENTKUBERNETES_USERNAME }}.azurecr.io/base-images/pipeline-build-image:${{ steps.compute_tag.outputs.image_tag }} > /dev/null 2>&1; then
+        docker login ${{ inputs.acr_login_server }} -u ${{ secrets.INVENTKUBERNETES_USERNAME }} -p ${{ secrets.INVENTKUBERNETES_PASSWORD }}
+        if docker manifest inspect ${{ inputs.acr_login_server }}/base-images/pipeline-build-image:${{ steps.compute_tag.outputs.image_tag }} > /dev/null 2>&1; then
           echo "exists=true" >> $GITHUB_OUTPUT
           echo "Image already exists. Skipping build."
         else
@@ -136,7 +128,7 @@ jobs:
       run: |
         # echo "Logging into Amazon ECR..."
         # aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
-        docker login ${{ secrets.INVENTKUBERNETES_USERNAME }}.azurecr.io --username ${{ secrets.AZURE_CLIENT_ID }} --password ${{ secrets.AZURE_CLIENT_SECRET }}
+        docker login ${{ inputs.acr_login_server }} --username ${{ secrets.AZURE_CLIENT_ID }} --password ${{ secrets.AZURE_CLIENT_SECRET }}
 
     - name: Set up Docker Buildx
       if: steps.check_image.outputs.exists == 'false'
@@ -165,7 +157,7 @@ jobs:
         file: ./.cicd/build/Dockerfile
         push: true
         network: host
-        tags: ${{ secrets.INVENTKUBERNETES_USERNAME }}.azurecr.io/base-images/pipeline-build-image:${{ steps.compute_tag.outputs.image_tag }}
+        tags: ${{ inputs.acr_login_server }}/base-images/pipeline-build-image:${{ steps.compute_tag.outputs.image_tag }}
         cache-from: type=local,src=/tmp/.buildx-cache
         cache-to: type=local,dest=/tmp/.buildx-cache,mode=max
 

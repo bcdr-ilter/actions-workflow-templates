@@ -2,6 +2,12 @@ name: Airflow Image
 
 on:
   workflow_call:
+    inputs:
+      acr_login_server:
+        description: 'ACR login server (caller forwards vars.ACR_LOGIN_SERVER).'
+        required: false
+        type: string
+        default: ''
     outputs:
       airflow_image_version:
         description: 'Generated Airflow image version'
@@ -39,7 +45,7 @@ jobs:
           if [ "$CLOUD_PROVIDER" == "aws" ]; then
             echo "REGISTRY=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com" >> $GITHUB_ENV
           elif [ "$CLOUD_PROVIDER" == "azure" ]; then
-            echo "REGISTRY=${{ secrets.INVENTKUBERNETES_USERNAME }}.azurecr.io" >> $GITHUB_ENV
+            echo "REGISTRY=${{ inputs.acr_login_server }}" >> $GITHUB_ENV
           fi
 
       - name: Set IMAGE_ENV based on Branch
@@ -141,7 +147,7 @@ jobs:
         if: env.CLOUD_PROVIDER == 'azure' && steps.image_check.outputs.exists == 'false'
         uses: azure/docker-login@v1
         with:
-          login-server: ${{ secrets.INVENTKUBERNETES_USERNAME }}.azurecr.io
+          login-server: ${{ inputs.acr_login_server }}
           username: ${{ secrets.INVENTKUBERNETES_USERNAME }}
           password: ${{ secrets.INVENTKUBERNETES_PASSWORD }}
 

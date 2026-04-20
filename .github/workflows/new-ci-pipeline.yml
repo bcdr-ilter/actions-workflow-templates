@@ -5,7 +5,7 @@ on:
 
 jobs:
   setup-and-test:
-    runs-on: ${{ vars.RUNNER_LABEL || 'arc-runner-set-eks' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'runner04' }}
 
     steps:
       # Checkout the repository code

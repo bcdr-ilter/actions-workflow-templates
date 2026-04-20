@@ -30,7 +30,7 @@ jobs:
 
   build_base_image:
     name: 'Build and Push Base Image'
-    runs-on: ${{ vars.RUNNER_LABEL || 'arc-runner-set-eks' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'runner04' }}
     defaults:
       run:
         shell: bash
@@ -166,7 +166,7 @@ jobs:
 
   ci-pipeline:
     needs: build_base_image
-    runs-on: ${{ vars.RUNNER_LABEL || 'arc-runner-set-eks' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'runner04' }}
     container:
       image: ${{ vars.ACR_LOGIN_SERVER || 'inventkubernetesbcdr.azurecr.io' }}/base-images/pipeline-build-image:${{ needs.build_base_image.outputs.image_tag }}
       options: --user root

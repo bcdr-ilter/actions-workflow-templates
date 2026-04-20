@@ -8,7 +8,7 @@ on:
 
 jobs:
   deploy-scripts:
-    runs-on: ${{ vars.RUNNER_LABEL || 'arc-runner-set-eks' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'runner04' }}
     env:
       AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
       STORAGE_ACCOUNT_NAME: ${{ vars.STORAGE_ACCOUNT_NAME }}

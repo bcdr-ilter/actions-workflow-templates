@@ -23,7 +23,7 @@ jobs:
         
       # This is where the magic happens - one simple action call!
       - name: Process Branch Configuration
-        uses: invent-ai/actions-workflow-templates/.github/actions/process-config@composite-test
+        uses: bcdr-ilter/actions-workflow-templates/.github/actions/process-config@composite-test
         with:
           branch-name: ${{ github.head_ref || github.ref_name }}
           customer-name: ${{ vars.CUSTOMER_NAME }}

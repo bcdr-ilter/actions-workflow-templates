@@ -288,7 +288,7 @@ jobs:
             DATASTORE_BUCKET_NAME=$DATASTORE_BUCKET_NAME \
             STORAGE_ACCOUNT_NAME=$STORAGE_ACCOUNT_NAME \
             IMAGE_ENV=$IMAGE_ENV \
-            ACR_LOGIN_SERVER=${{ vars.ACR_LOGIN_SERVER || 'inventkubernetesbcdr.azurecr.io' }} \
+            ACR_LOGIN_SERVER=${{ secrets.INVENTKUBERNETES_USERNAME }}.azurecr.io \
             CUSTOMER_REMOTE_BASE_LOG_FOLDER="s3://invent-${CUSTOMER_SUBDOMAIN}-airflow2-prod-logs/$K8S_NAMESPACE" \
             IDENTITY_CLIENT_ID=$IDENTITY_CLIENT_ID \
             envsubst | \

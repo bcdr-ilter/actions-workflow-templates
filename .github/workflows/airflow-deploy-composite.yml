@@ -81,19 +81,21 @@ jobs:
 
       - name: Debug secret visibility
         run: |
-          echo "GH_APP_ID length: ${#GH_APP_ID_VAL}"
-          echo "GH_APP_PRIVATE_KEY length: ${#GH_APP_PK_VAL}"
+          echo "BCDR_APP_ID length: ${#APP_ID_VAL}"
+          echo "BCDR_APP_PRIVATE_KEY length: ${#PK_VAL}"
+          echo "INVENTKUBERNETES_USERNAME length: ${#ACR_USER_VAL}"
         env:
-          GH_APP_ID_VAL: ${{ secrets.GH_APP_ID }}
-          GH_APP_PK_VAL: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          APP_ID_VAL: ${{ secrets.BCDR_APP_ID }}
+          PK_VAL: ${{ secrets.BCDR_APP_PRIVATE_KEY }}
+          ACR_USER_VAL: ${{ secrets.INVENTKUBERNETES_USERNAME }}
 
       - name: Mint cross-repo token for k8s infra checkout
         id: k8s_token
         uses: actions/create-github-app-token@v1
         with:
-          app-id: ${{ secrets.GH_APP_ID }}
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-          owner: invent-ai
+          app-id: ${{ secrets.BCDR_APP_ID }}
+          private-key: ${{ secrets.BCDR_APP_PRIVATE_KEY }}
+          owner: bcdr-ilter
           repositories: airflow-on-k8s-infrastructure
 
       - name: Checkout k8s Code

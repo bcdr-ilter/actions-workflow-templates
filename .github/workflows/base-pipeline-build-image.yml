@@ -38,6 +38,7 @@ jobs:
     outputs:
       image_tag: ${{ steps.compute_tag.outputs.image_tag }}
       image_exists: ${{ steps.check_image.outputs.exists }}
+      registry:   ${{ steps.compute_tag.outputs.registry }}
 
     steps:
     - name: Checkout Repository
@@ -45,18 +46,23 @@ jobs:
 
     - name: Compute image tag
       id: compute_tag
+      env:
+        ACR_NAME: ${{ secrets.INVENTKUBERNETES_USERNAME }}
       run: |
         # Shorten Dockerfile hash to the first 8 characters
         DOCKERFILE_HASH=$(sha256sum .cicd/build/Dockerfile | awk '{print substr($1, 1, 8)}')
-        
+
         # Shorten requirements hash to the first 8 characters
         REQ_HASH=$(sha256sum requirements-*.txt | sha256sum | awk '{print substr($1, 1, 8)}')
         DAGS_HASH=$(echo "${{ hashFiles('dags/**') }}" | cut -c1-8)
         # Construct the tag with shortened hashes
         TAG="${DOCKERFILE_HASH}-${REQ_HASH}-${DAGS_HASH}"
-        
+
         # Output the computed image tag for use in other steps
         echo "image_tag=$TAG" >> $GITHUB_OUTPUT
+        # ACR admin username == ACR name; expose login server for downstream jobs
+        # (container.image cannot reference secrets directly, so we output it here)
+        echo "registry=${ACR_NAME}.azurecr.io" >> $GITHUB_OUTPUT
 
     - name: Check if image already exists in ACR
       id: check_image
@@ -168,7 +174,7 @@ jobs:
     needs: build_base_image
     runs-on: ${{ vars.RUNNER_LABEL || 'runner04' }}
     container:
-      image: ${{ secrets.INVENTKUBERNETES_USERNAME }}.azurecr.io/base-images/pipeline-build-image:${{ needs.build_base_image.outputs.image_tag }}
+      image: ${{ needs.build_base_image.outputs.registry }}/base-images/pipeline-build-image:${{ needs.build_base_image.outputs.image_tag }}
       options: --user root
       credentials:
         username: ${{ secrets.INVENTKUBERNETES_USERNAME }}

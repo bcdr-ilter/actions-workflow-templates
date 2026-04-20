@@ -27,7 +27,7 @@ jobs:
       - name: Checkout Configuration Templates
         uses: actions/checkout@v4
         with:
-          repository: bcdr-ilter/actions-workflow-templates
+          repository: invent-ai/actions-workflow-templates
           path: config-templates
           ref: main
           token: ${{ secrets.GH_PAT }}
@@ -35,7 +35,7 @@ jobs:
       - name: Checkout k8s Code
         uses: actions/checkout@v4
         with:
-          repository: bcdr-ilter/airflow-on-k8s-infrastructure
+          repository: invent-ai/airflow-on-k8s-infrastructure
           path: k8s
           ref: ${{ vars.AIRFLOW_REPO_REF }}
           token: ${{ secrets.GH_PAT }}
@@ -72,7 +72,7 @@ jobs:
           fi
 
       - name: Process branch configuration
-        uses: bcdr-ilter/actions-workflow-templates/.github/actions/process-config@composite-test
+        uses: invent-ai/actions-workflow-templates/.github/actions/process-config@composite-test
         with:
           branch-name: ${{ github.head_ref || github.ref_name }}
           customer-name: ${{ vars.CUSTOMER_NAME }}

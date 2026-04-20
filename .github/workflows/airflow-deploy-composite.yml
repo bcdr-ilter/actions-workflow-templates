@@ -36,7 +36,7 @@ jobs:
 
 
       - name: Process Branch Configuration
-        uses: bcdr-ilter/actions-workflow-templates/.github/actions/process-config@composite-test
+        uses: invent-ai/actions-workflow-templates/.github/actions/process-config@composite-test
         with:
           branch-name: ${{ github.head_ref || github.ref_name }}
           customer-name: ${{ vars.CUSTOMER_NAME }}
@@ -93,13 +93,13 @@ jobs:
         with:
           app-id: ${{ secrets.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-          owner: bcdr-ilter
+          owner: invent-ai
           repositories: airflow-on-k8s-infrastructure
 
       - name: Checkout k8s Code
         uses: actions/checkout@v4
         with:
-          repository: bcdr-ilter/airflow-on-k8s-infrastructure
+          repository: invent-ai/airflow-on-k8s-infrastructure
           path: k8s
           ref: ${{ env.AIRFLOW_REPO_REF }}
           token: ${{ steps.k8s_token.outputs.token }}

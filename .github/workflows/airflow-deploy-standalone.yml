@@ -27,7 +27,7 @@ jobs:
       - name: Checkout k8s Code
         uses: actions/checkout@v4
         with:
-          repository: bcdr-ilter/airflow-on-k8s-infrastructure
+          repository: invent-ai/airflow-on-k8s-infrastructure
           path: k8s
           ref: ${{ vars.AIRFLOW_REPO_REF }}
           token: ${{ secrets.GH_PAT }}

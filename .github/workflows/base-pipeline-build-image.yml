@@ -41,7 +41,6 @@ jobs:
     outputs:
       image_tag:    ${{ steps.compute_tag.outputs.image_tag }}
       image_exists: ${{ steps.check_image.outputs.exists }}
-      registry:     ${{ inputs.acr_login_server }}
 
     steps:
     - name: Checkout Repository
@@ -133,7 +132,7 @@ jobs:
     needs: build_base_image
     runs-on: ${{ vars.RUNNER_LABEL || 'runner04' }}
     container:
-      image: ${{ needs.build_base_image.outputs.registry }}/base-images/pipeline-build-image:${{ needs.build_base_image.outputs.image_tag }}
+      image: ${{ inputs.acr_login_server }}/base-images/pipeline-build-image:${{ needs.build_base_image.outputs.image_tag }}
       options: --user root
       credentials:
         username: ${{ secrets.INVENTKUBERNETES_USERNAME }}

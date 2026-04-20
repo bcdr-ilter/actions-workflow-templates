@@ -25,7 +25,7 @@ jobs:
 
       # Set up Python environment for Spark
       - name: Set up Python for Spark
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v5
         with:
           python-version: '3.9'  # Use your desired Python version
 
@@ -38,7 +38,7 @@ jobs:
 
       # Set up Python environment for Airflow
       - name: Set up Python for Airflow
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v5
         with:
           python-version: '3.9'
 

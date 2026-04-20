@@ -94,7 +94,7 @@ jobs:
           cloud-provider: ${{ vars.CLOUD_PROVIDER || 'azure' }}
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -192,7 +192,7 @@ jobs:
 
       - name: Azure Login
         if: env.CLOUD_PROVIDER == 'azure'
-        uses: azure/login@v1
+        uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 

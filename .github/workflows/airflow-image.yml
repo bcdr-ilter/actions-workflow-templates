@@ -10,7 +10,7 @@ on:
 jobs:
   build-push-airflow-image:
     name: 'Build and Push Airflow Image to Registry'
-    runs-on: ${{ vars.RUNNER_LABEL || 'arc-runner-set-eks' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'runner04' }}
     outputs:
       airflow_image_version: ${{ steps.compute_version.outputs.version }}
     env:

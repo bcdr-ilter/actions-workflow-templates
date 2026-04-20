@@ -76,7 +76,7 @@ jobs:
 
   code-scan:
     name: Code Scanning
-    runs-on: ${{ vars.RUNNER_LABEL || 'arc-runner-set-eks' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'runner04' }}
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4

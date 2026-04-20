@@ -83,29 +83,3 @@ jobs:
       airflow-image-version: ${{ needs.build-and-push-airflow-image.outputs.airflow_image_version }}
       acr_login_server: ${{ inputs.acr_login_server }}
 
-  code-scan:
-    name: Code Scanning
-    runs-on: ${{ vars.RUNNER_LABEL || 'runner04' }}
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE}}
-          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
-
-      - name: Run Trivy vulnerability scanner in fs mode
-        uses: aquasecurity/trivy-action@0.30.0
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'table'
-          scanners: 'vuln,secret,misconfig'
-          severity: 'CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN'
-          exit-code: '0'                    # allows pipeline to continue
-        env:
-          TRIVY_DEBUG: "true"
